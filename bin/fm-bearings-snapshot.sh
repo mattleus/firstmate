@@ -298,7 +298,8 @@ EOF
         [ .[] | {
           num:(.number|tostring),
           repo:$repo,
-          task:(if (.headRefName // "" | startswith("fm/")) then (.headRefName | ltrimstr("fm/")) else "-" end),
+          task:(if (.headRefName // "" | startswith("ml/")) then (.headRefName | ltrimstr("ml/"))
+            elif (.headRefName // "" | startswith("fm/")) then (.headRefName | ltrimstr("fm/")) else "-" end),
           url:(.url // "-"),
           review:(.reviewDecision // "none"),
           mergeable:(.mergeable // "UNKNOWN"),

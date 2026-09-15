@@ -179,7 +179,7 @@ if [ "$MODE" = no-mistakes ]; then
   PROMOTION_ASK_USER_BLOCK=$(fm_ask_user_escalation_block "$DATA" "$ID")
 fi
 IFS= read -r -d '' PROMOTION_SHIP_SPEC <<EOF || true
-If these promotion steps were already completed before a relaunch, preserve the existing \`ml/$ID\` branch and continue from its current state; do not repeat them destructively.
+If these promotion steps were already completed before a relaunch, preserve the existing worker branch and continue from its current state; do not repeat them destructively. That branch is normally \`ml/$ID\`; a pre-cutover promoted task instead has \`fm/$ID\`, which must be preserved as-is - never create a fresh \`ml/$ID\` while prior \`fm/$ID\` work exists.
 1. **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from. If either does not resolve to the worktree you were launched in, stop and escalate to firstmate.
 2. Inventory this worktree's scratch state with \`git status\` and \`git log\` before changing anything.
 3. Return to a clean default-branch base, then create your branch: \`git checkout -b ml/$ID\`.

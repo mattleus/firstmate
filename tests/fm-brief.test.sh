@@ -220,7 +220,7 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{TESTING_SEAMS}" "$brief" "$id: brief missing the {TESTING_SEAMS} placeholder"
     assert_grep "FirstMate's selected delivery path is the only final review owner." "$brief" \
       "$id: brief did not keep final review with FirstMate's delivery path"
-    assert_grep 'Do not invoke `code-review`, `implement`, `research`, `wayfinder`, or another workflow that delegates work or starts a second delivery path.' "$brief" \
+    assert_grep "Do not invoke \`code-review\`, \`implement\`, \`research\`, \`wayfinder\`, or another workflow that delegates work or starts a second delivery path." "$brief" \
       "$id: brief did not prevent nested orchestration and duplicate review"
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \

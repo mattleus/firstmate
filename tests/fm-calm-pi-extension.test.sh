@@ -3796,8 +3796,19 @@ const tree = dom.match(/<div[^>]*id="tree-container"[^>]*>([\s\S]*?)<div[^>]*id=
 if (!messages || !tree) process.exit(1);
 if (!/<div class="user-message"[^>]*>[\s\S]*Show a deterministic tool example\./.test(messages)) process.exit(1);
 if (!/<div class="assistant-message"[^>]*>[\s\S]*The deterministic tool example is complete\./.test(messages)) process.exit(1);
-if (messages.includes('<div class="hook-message"')) process.exit(1);
-if (messages.includes("[firstmate-synthetic-input]")) process.exit(1);
+// Newer Pi exports display:false custom messages as provenance rows carrying
+// the hook-message-hidden class, which the export's stock CSS keeps out of the
+// rendered conversation unless the body opts in; Pi up to the 1.0.2 line omits
+// those rows entirely. Either way the visible conversation must not show a
+// synthetic row: every hook row must be hidden, the hidden rendering mode must
+// not be active, and the synthetic label must not survive outside hidden rows.
+if (/<div class="hook-message(?! hook-message-hidden)/.test(messages)) process.exit(1);
+if (/<body class="[^"]*show-hidden-messages/.test(dom)) process.exit(1);
+const visibleMessages = messages.replace(
+  /<div class="hook-message hook-message-hidden"[\s\S]*?(?=<div class="(?:user|assistant|hook|tool)-message|$)/g,
+  "",
+);
+if (visibleMessages.includes("[firstmate-synthetic-input]")) process.exit(1);
 for (const current of ["CURRENT_WATCHER_E2E", "CURRENT_TURN_END_E2E", "CURRENT_AWAY_E2E", "CURRENT_FROM_FIRSTMATE_E2E", "CURRENT_LAUNCH_BRIEF_E2E"]) {
   if (!messages.includes(current)) process.exit(1);
 }

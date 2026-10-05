@@ -1,0 +1,9 @@
+exit=1
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /Users/matt/.no-mistakes/worktrees/e1a436203903/01M45BVVZ7BDQHBZZ36AFF6QTX/.pi/extensions/fm-primary-turnend-guard.ts -e /Users/matt/.no-mistakes/worktrees/e1a436203903/01M45BVVZ7BDQHBZZ36AFF6QTX/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: /var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T//fm-mp-drive.aaTXwO/s3/home/data/promote-unfilled/brief.md still contains {REQUIRED_SKILLS} or {TESTING_SEAMS}; fill ## Required skills and ## Agreed testing seams before promotion

@@ -1,0 +1,11 @@
+exit=0
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /Users/matt/.no-mistakes/worktrees/e1a436203903/01M45BVVZ7BDQHBZZ36AFF6QTX/.pi/extensions/fm-primary-turnend-guard.ts -e /Users/matt/.no-mistakes/worktrees/e1a436203903/01M45BVVZ7BDQHBZZ36AFF6QTX/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+promoted promote-legacy to ship mode=direct-PR yolo=off (teardown protection restored)
+wrote ship instructions for mode=direct-PR: /var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T//fm-mp-drive.aaTXwO/s5/home/data/promote-legacy/ship-instructions.md
+next: FM_HOME=/var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T//fm-mp-drive.aaTXwO/s5/home bin/fm-send.sh fm-promote-legacy "$(cat /var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T//fm-mp-drive.aaTXwO/s5/home/data/promote-legacy/ship-instructions.md)"

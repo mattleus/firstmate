@@ -1,0 +1,2 @@
+exit=1
+error: /var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T//fm-mp-drive.aaTXwO/s4/home/data/empty-skills/brief.md must contain nonempty ## Required skills and ## Agreed testing seams under # Engineering method before spawn

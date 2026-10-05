@@ -313,6 +313,16 @@ The [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/
 
 The `data/secondmates.md` line contract is owned by the [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md#routing-table), and the secondmate environment variables are documented in [configuration.md](configuration.md).
 
+## Engineering methods stay inside the task lifecycle
+
+FirstMate owns captain interaction, task classification, worker allocation, isolation, supervision, delivery, and merge authority, while optional Matt Pocock skills contribute engineering methods inside that lifecycle.
+The [`matt-pocock-integration` skill](../.agents/skills/matt-pocock-integration/SKILL.md) translates upstream planning and implementation workflows into FirstMate scouts, ships, and planning artifacts rather than allowing a nested agent fleet or second delivery path.
+Every newly scaffolded ship or scout instruction file has task-specific `Required skills` and `Agreed testing seams` subsections, and `bin/fm-spawn.sh` refuses a current scaffold while either is unfilled or empty.
+Saved instructions that predate the section remain launchable for recovery compatibility.
+`bin/fm-promote.sh` validates the same contract and sends the current engineering method to the promoted worker, while preserving it in the instructions used by any later replacement.
+The selected task delivery mode remains the sole final-review owner, so a no-mistakes task never stacks an upstream `code-review` or `implement` completion flow on top of its pipeline.
+See [Matt Pocock engineering skills](matt-pocock-skills.md) for installation and operator-facing behavior.
+
 ## Delivery modes are explicit per task
 
 `no-mistakes` tasks run the full validation pipeline, `direct-PR` tasks open PRs without that pipeline, and `local-only` tasks stay local until firstmate performs an approved fast-forward merge.

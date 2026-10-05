@@ -53,12 +53,18 @@ import sys
 
 brief = Path(sys.argv[1])
 status = sys.argv[2]
-brief.write_text(brief.read_text().replace("{TASK}", f'''Run a cmux communication probe.
+brief.write_text(
+    brief.read_text()
+    .replace("{TASK}", f'''Run a cmux communication probe.
 
 Immediately append `working: cmux composer probe ready` to `{status}`.
 Then append exactly `needs-decision [key=probe-decision]: awaiting codeword` to that file and stop to wait for a firstmate message.
 When you receive a firstmate message containing `ALBATROSS`, append `done: received ALBATROSS` to that status file and stop.
-Do not change project files or make a commit.'''))
+Do not change project files or make a commit.''')
+    .replace("{FIRSTMATE_SPEC}", "Exercise only the supervised communication path.")
+    .replace("{REQUIRED_SKILLS}", "- None - this is a communication probe.")
+    .replace("{TESTING_SEAMS}", "- The cmux worker messaging interface.")
+)
 PY
 
 FM_HOME="$LAB" "$ROOT/bin/fm-spawn.sh" "$TASK" "$LAB/projects/comms" --scout --harness claude --model haiku --backend cmux \

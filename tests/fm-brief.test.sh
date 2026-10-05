@@ -213,6 +213,15 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
+    assert_grep "# Engineering method" "$brief" "$id: brief missing Engineering method section"
+    assert_grep "## Required skills" "$brief" "$id: brief missing Required skills subsection"
+    assert_grep "{REQUIRED_SKILLS}" "$brief" "$id: brief missing the {REQUIRED_SKILLS} placeholder"
+    assert_grep "## Agreed testing seams" "$brief" "$id: brief missing Agreed testing seams subsection"
+    assert_grep "{TESTING_SEAMS}" "$brief" "$id: brief missing the {TESTING_SEAMS} placeholder"
+    assert_grep "FirstMate's selected delivery path is the only final review owner." "$brief" \
+      "$id: brief did not keep final review with FirstMate's delivery path"
+    assert_grep "Do not invoke \`code-review\`, \`implement\`, \`research\`, \`wayfinder\`, or another workflow that delegates work or starts a second delivery path." "$brief" \
+      "$id: brief did not prevent nested orchestration and duplicate review"
     assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
@@ -887,6 +896,9 @@ test_scout_and_secondmate_scaffold() {
   assert_grep "## Captain's intent" "$brief" "scout brief missing Captain's intent subsection"
   assert_grep "## Firstmate spec" "$brief" "scout brief missing Firstmate spec subsection"
   assert_grep "{FIRSTMATE_SPEC}" "$brief" "scout brief missing the spec placeholder"
+  assert_grep "# Engineering method" "$brief" "scout brief missing Engineering method section"
+  assert_grep "{REQUIRED_SKILLS}" "$brief" "scout brief missing the Required skills placeholder"
+  assert_grep "{TESTING_SEAMS}" "$brief" "scout brief missing the testing seams placeholder"
 
   FM_SECONDMATE_CHARTER='Supervise the alpha domain.' \
     FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-sm-q6 --secondmate alpha >/dev/null 2>&1 \
@@ -899,6 +911,8 @@ test_scout_and_secondmate_scaffold() {
     "secondmate charter must not grow ship/scout Task subsections"
   assert_no_grep "{FIRSTMATE_SPEC}" "$brief" \
     "secondmate charter must not carry the Firstmate spec placeholder"
+  assert_no_grep "# Engineering method" "$brief" \
+    "secondmate charter must not carry a task engineering method"
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 

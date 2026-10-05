@@ -1299,14 +1299,18 @@ for (const { name, actual } of rows) {
     throw new Error(`${name} was not hidden before export rendering`);
   }
 }
+// Pi 1.0.1 renamed the createToolHtmlRenderer lookup dep from getToolDefinition
+// to getToolRenderers (exportToHtml now resolves renderers through the extension
+// runner). Older Pi destructures the old name and ignores the extra key, so the
+// fixture passes both spellings of the same lookup to cover either era.
+const exportToolHtmlDeps = () => {
+  const lookup = (name) => tools.find((tool) => tool.name === name);
+  return { getToolDefinition: lookup, getToolRenderers: lookup, theme, cwd: process.cwd() };
+};
 async function assertStockHtmlRendering(command, submitData) {
   editorText = command;
   terminalInputHandler(submitData);
-  const htmlRenderer = createToolHtmlRenderer({
-    getToolDefinition: (name) => tools.find((tool) => tool.name === name),
-    theme,
-    cwd: process.cwd(),
-  });
+  const htmlRenderer = createToolHtmlRenderer(exportToolHtmlDeps());
   const exportCases = [
     ...cases.filter(([toolName]) => toolName === "grep" || toolName === "find"),
     ["fm_watch_arm_pi", watchArgs, watchResult],
@@ -1333,11 +1337,7 @@ await assertStockHtmlRendering("/export calm.html", "\r");
 getKeybindings().setUserBindings({ "tui.input.submit": "alt+s" });
 editorText = "/export remapped.html";
 terminalInputHandler("\r");
-const unmatchedRenderer = createToolHtmlRenderer({
-  getToolDefinition: (name) => tools.find((tool) => tool.name === name),
-  theme,
-  cwd: process.cwd(),
-});
+const unmatchedRenderer = createToolHtmlRenderer(exportToolHtmlDeps());
 if (unmatchedRenderer.renderCall("unmatched-submit", "grep", { pattern: "alpha", path: "." })) {
   throw new Error("ordinary non-submit input activated HTML export rendering");
 }
@@ -3577,7 +3577,11 @@ TS
 {"type":"message","id":"a0000016","parentId":"a0000015","timestamp":"$now","message":{"role":"assistant","content":[{"type":"text","text":"The deterministic tool example is complete."}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":2,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":3,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":16}}
 JSON
 
-  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
+  # The pane must be tall enough to hold the whole restored transcript plus every
+  # row this E2E appends later: since Pi 1.0's fullscreen TUI the transcript lives
+  # in Pi's own virtualized scrollback, so the tmux capture below (viewport plus
+  # recent history) only ever sees rows currently on screen.
+  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 400 \
     "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-skills --no-prompt-templates --no-context-files --session '$session_file'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 30"
   wait_for_text "$default_snapshot" "The deterministic tool example is complete." \
     || fail "Pi calm E2E did not reach the restored session transcript"
@@ -3792,8 +3796,19 @@ const tree = dom.match(/<div[^>]*id="tree-container"[^>]*>([\s\S]*?)<div[^>]*id=
 if (!messages || !tree) process.exit(1);
 if (!/<div class="user-message"[^>]*>[\s\S]*Show a deterministic tool example\./.test(messages)) process.exit(1);
 if (!/<div class="assistant-message"[^>]*>[\s\S]*The deterministic tool example is complete\./.test(messages)) process.exit(1);
-if (messages.includes('<div class="hook-message"')) process.exit(1);
-if (messages.includes("[firstmate-synthetic-input]")) process.exit(1);
+// Newer Pi exports display:false custom messages as provenance rows carrying
+// the hook-message-hidden class, which the export's stock CSS keeps out of the
+// rendered conversation unless the body opts in; Pi up to the 1.0.2 line omits
+// those rows entirely. Either way the visible conversation must not show a
+// synthetic row: every hook row must be hidden, the hidden rendering mode must
+// not be active, and the synthetic label must not survive outside hidden rows.
+if (/<div class="hook-message(?! hook-message-hidden)/.test(messages)) process.exit(1);
+if (/<body class="[^"]*show-hidden-messages/.test(dom)) process.exit(1);
+const visibleMessages = messages.replace(
+  /<div class="hook-message hook-message-hidden"[\s\S]*?(?=<div class="(?:user|assistant|hook|tool)-message|$)/g,
+  "",
+);
+if (visibleMessages.includes("[firstmate-synthetic-input]")) process.exit(1);
 for (const current of ["CURRENT_WATCHER_E2E", "CURRENT_TURN_END_E2E", "CURRENT_AWAY_E2E", "CURRENT_FROM_FIRSTMATE_E2E", "CURRENT_LAUNCH_BRIEF_E2E"]) {
   if (!messages.includes(current)) process.exit(1);
 }
@@ -4182,7 +4197,7 @@ JS
     active_screen_wait=$((active_screen_wait + 1))
   done
   [ "$(cat "$home/config/calm")" = on ] || fail "Calm was not restored before the persistence restart"
-  tmux -L "$TMUX_SOCKET" resize-window -t "$TMUX_SESSION" -x 180 -y 44
+  tmux -L "$TMUX_SOCKET" resize-window -t "$TMUX_SESSION" -x 180 -y 400
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/quit"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
@@ -4190,7 +4205,7 @@ JS
     || fail "Pi did not exit cleanly before the Calm persistence restart"
   tmux -L "$TMUX_SOCKET" kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 
-  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 44 \
+  tmux -L "$TMUX_SOCKET" new-session -d -s "$TMUX_SESSION" -x 180 -y 400 \
     "cd '$project' && env FM_HOME='$home' PI_CODING_AGENT_DIR='$config' FM_OPERATIONAL_INPUT_SCRIPT='$OPERATIONAL_INPUT' PI_OFFLINE=1 pi --approve --no-skills --no-prompt-templates --no-context-files --session '$session_file'; rc=\$?; printf '\nPI_EXIT=%s\n' \"\$rc\"; sleep 30"
   wait_for_text "$restarted_snapshot" "CALM_WORKING_E2E_RESPONSE" \
     || fail "Pi did not restore the persisted session after restart"

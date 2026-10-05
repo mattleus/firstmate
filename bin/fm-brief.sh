@@ -8,8 +8,11 @@
 # report, decision, or PR the ask refers to, without added speaker labels or
 # direct address) and `{FIRSTMATE_SPEC}`
 # under `## Firstmate spec` (build instructions, which are never the captain's
-# intent). bin/fm-dod-lib.sh owns the no-mistakes `--intent` contract those
-# subsections feed; bin/fm-spawn.sh refuses leftover placeholders and a
+# intent). Their `# Engineering method` section has two more task-specific fill
+# sites: `{REQUIRED_SKILLS}` names the method skills the worker must load, and
+# `{TESTING_SEAMS}` names the agreed public test seams or gives the reason none
+# applies. bin/fm-dod-lib.sh owns the no-mistakes `--intent` contract those
+# Task subsections feed; bin/fm-spawn.sh refuses leftover placeholders and a
 # `## Captain's intent` line opening with a Captain label or address. Secondmate
 # charters still use a single `{TASK}` charter fill. Firstmate may adjust other
 # sections when the task genuinely deviates (e.g. working an existing external
@@ -358,6 +361,32 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
 
+IFS= read -r -d '' ENGINEERING_SECTION <<'EOF' || true
+# Engineering method
+Fill each task-specific subsection with one bullet per item, or write `None - <reason>.`
+
+## Required skills
+{REQUIRED_SKILLS}
+
+## Agreed testing seams
+{TESTING_SEAMS}
+
+## Execution
+Each required-skill bullet is an exact skill ID unless the subsection contains only `None - <reason>.`
+Load every named skill before using its method.
+If a named skill is unavailable, report the missing skill as a blocker and stop.
+Testing seams are the agreed public interfaces where behavior will be tested.
+Write tests only at these seams.
+For a bug, reproduce the end-user path first and observe the regression test fail before the fix.
+When tests apply, work in vertical red-green slices rather than writing every test or every implementation change in one horizontal batch.
+
+## Ownership
+FirstMate's selected delivery path is the only final review owner.
+Use the required skills for engineering method while keeping orchestration, worker allocation, tracker mutation, review, PR, CI, and merge authority with FirstMate and this brief's Definition of done.
+Do not invoke `code-review`, `implement`, `research`, `wayfinder`, or another workflow that delegates work or starts a second delivery path.
+EOF
+ENGINEERING_SECTION=${ENGINEERING_SECTION%$'\n'}
+
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
   LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate.'
@@ -368,6 +397,8 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$ENGINEERING_SECTION
 
 $HERDR_SECTION
 
@@ -424,7 +455,7 @@ Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-li
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
-echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "scaffolded: $BRIEF (scout; replace {TASK}, {FIRSTMATE_SPEC}, {REQUIRED_SKILLS}, and {TESTING_SEAMS})"
 exit 0
 fi
 
@@ -452,6 +483,8 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$ENGINEERING_SECTION
 
 $HERDR_SECTION
 
@@ -514,4 +547,4 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK}, {FIRSTMATE_SPEC}, {REQUIRED_SKILLS}, and {TESTING_SEAMS})"

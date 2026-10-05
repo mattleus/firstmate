@@ -15,10 +15,12 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-pi-branch-extension)
 EXT="$ROOT/.pi/extensions/fm-branch-supervision.ts"
 export NODE_NO_WARNINGS=1
-# The Pi release whose stock renderer stopped supplying an implicit reset at
-# multiline boundaries, which is the contract this file's renderer cases
-# compare against.
-PI_STOCK_RENDER_FLOOR=0.84.4
+# The Pi release whose stock renderer contract the extension's own renderers
+# now target: since 0.99.0 the stock call fallback also renders the tool's
+# args (a muted collapsed preview beside the bold title, or an indented
+# per-arg block when expanded), and the extension emits them itself. This is
+# also the contract this file's renderer cases compare against.
+PI_STOCK_RENDER_FLOOR=0.99.0
 
 # Semantic-version floor for a version string this file already holds (Pi's
 # package.json field). bin/fm-bootstrap.sh's tool_version_at_least is the same
@@ -4218,12 +4220,13 @@ test_outcomes_tool_uses_stock_execution_and_export_consumers() {
   fi
   # This case compares the extension's own renderers against Pi's stock
   # rendering, so its verdict is only meaningful against the vendor contract
-  # those renderers target: since Pi 0.84.4 the stock renderer no longer
-  # supplies an implicit reset at multiline boundaries, and the extension
-  # emits that reset itself. An older installed Pi still supplies it, so the
-  # two legitimately differ there and a comparison would report a defect that
-  # is really a version skew. Name the version and skip rather than degrade
-  # quietly; a package whose version cannot be read at all is still a failure.
+  # those renderers target: since Pi 0.99.0 the stock call fallback renders
+  # the tool's args beside (collapsed) or below (expanded) the bold title,
+  # and the extension mirrors that itself. An older installed Pi renders the
+  # bare title, so the two legitimately differ there and a comparison would
+  # report a defect that is really a version skew. Name the version and skip
+  # rather than degrade quietly; a package whose version cannot be read at
+  # all is still a failure.
   package_version=$(node -p 'require(process.argv[1]).version || ""' "$package_dir/package.json" 2>/dev/null || printf '')
   [ -n "$package_version" ] \
     || fail "installed @earendil-works/pi-coding-agent has no readable version at $package_dir"
@@ -4344,8 +4347,11 @@ if (JSON.stringify(actualRow.render(100)) !== JSON.stringify(stockRow.render(100
 }
 
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: true });
-const stockHtml = createToolHtmlRenderer({ getToolDefinition: () => stockDefinition, theme, cwd: process.cwd() });
-const actualHtml = createToolHtmlRenderer({ getToolDefinition: () => actualDefinition, theme, cwd: process.cwd() });
+// Pi 1.0.1 renamed the lookup dep from getToolDefinition to getToolRenderers;
+// pass both spellings so the structured-fallback assertion exercises the tool
+// on either era of Pi rather than passing vacuously from an unrecognized key.
+const stockHtml = createToolHtmlRenderer({ getToolDefinition: () => stockDefinition, getToolRenderers: () => stockDefinition, theme, cwd: process.cwd() });
+const actualHtml = createToolHtmlRenderer({ getToolDefinition: () => actualDefinition, getToolRenderers: () => actualDefinition, theme, cwd: process.cwd() });
 const stockCall = stockHtml.renderCall("stock-html", "fm_branch_outcomes", args);
 const actualCall = actualHtml.renderCall("actual-html", "fm_branch_outcomes", args);
 const stockResult = stockHtml.renderResult("stock-html", "fm_branch_outcomes", result.content, result.details, false);

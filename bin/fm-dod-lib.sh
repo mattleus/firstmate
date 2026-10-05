@@ -23,10 +23,10 @@
 # roughly the same specification - so a report, decision, or PR the intent
 # refers to is written into it as substance, never left as a pointer.
 # bin/fm-brief.sh scaffolds those two `# Task` subsections; bin/fm-spawn.sh and
-# bin/fm-promote.sh refuse leftover `{TASK}` / `{FIRSTMATE_SPEC}` placeholders
-# and a `## Captain's intent` line opening with a Captain label or address
-# through the helpers below. Other mentions of `--intent` point here rather than
-# restating the rule.
+# bin/fm-promote.sh refuse leftover `{TASK}` / `{FIRSTMATE_SPEC}` placeholders,
+# incomplete current Engineering method sections, and a `## Captain's intent`
+# line opening with a Captain label or address through the helpers below.
+# Other mentions of `--intent` point here rather than restating the rule.
 # Every heredoc here stays outside a command substitution: `VAR=$(cat <<EOF ...)`
 # breaks parsing of the whole file on Bash 3.2 (tests/fm-brief.test.sh).
 # fm_brief_worker_role owns the ship/scout role scope. bin/fm-spawn.sh is its one
@@ -169,6 +169,49 @@ fm_brief_task_heading_present() {  # <file> <heading>
   local task
   task=$(fm_brief_heading_body "$1" "# Task")
   printf '%s\n' "$task" | fm_brief_heading_parse - "$2" present >/dev/null
+}
+
+fm_brief_engineering_contract_present() {  # <file>
+  fm_brief_heading_present "$1" "# Engineering method"
+}
+
+fm_brief_engineering_heading_body() {  # <file> <heading>
+  local method
+  method=$(fm_brief_heading_body "$1" "# Engineering method")
+  printf '%s\n' "$method" | fm_brief_heading_parse - "$2" body
+}
+
+fm_brief_engineering_heading_present() {  # <file> <heading>
+  local method
+  method=$(fm_brief_heading_body "$1" "# Engineering method")
+  printf '%s\n' "$method" | fm_brief_heading_parse - "$2" present >/dev/null
+}
+
+# Return 0 only when a current Engineering method subsection still consists of
+# its scaffold placeholder. Literal examples elsewhere remain ordinary content.
+fm_brief_engineering_placeholders_present() {  # <file>
+  local file=$1 skills seams
+  [ -f "$file" ] || return 1
+  skills=$(fm_brief_engineering_heading_body "$file" "## Required skills")
+  seams=$(fm_brief_engineering_heading_body "$file" "## Agreed testing seams")
+  [ "$(printf '%s' "$skills" | tr -d '[:space:]')" = '{REQUIRED_SKILLS}' ] && return 0
+  [ "$(printf '%s' "$seams" | tr -d '[:space:]')" = '{TESTING_SEAMS}' ] && return 0
+  return 1
+}
+
+# A current Engineering method contract is complete only when both task-specific
+# bodies have content. A brief without the top-level section predates the
+# contract and remains launchable for recovery compatibility.
+fm_brief_engineering_content_valid() {  # <file>
+  local file=$1 skills seams
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+  fm_brief_engineering_contract_present "$file" || return 1
+  fm_brief_engineering_heading_present "$file" "## Required skills" || return 1
+  fm_brief_engineering_heading_present "$file" "## Agreed testing seams" || return 1
+  skills=$(fm_brief_engineering_heading_body "$file" "## Required skills")
+  seams=$(fm_brief_engineering_heading_body "$file" "## Agreed testing seams")
+  [ -n "$(printf '%s' "$skills" | tr -d '[:space:]')" ] || return 1
+  [ -n "$(printf '%s' "$seams" | tr -d '[:space:]')" ] || return 1
 }
 
 fm_brief_marked_captain_words() {  # <task-body>

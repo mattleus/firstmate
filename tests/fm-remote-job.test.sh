@@ -453,8 +453,15 @@ done
 assert_present "$STARTED" "the shutdown fixture did not begin executing"
 WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 kill -TERM "$WORKER_PID"
-for _ in $(seq 1 100); do
-  kill -0 "$WORKER_PID" 2>/dev/null || break
+# Poll on a wall-clock deadline, not a fixed fork-count budget like the
+# waited-for-start loops above: a contended CI serial shard stretches every
+# forked `sleep 0.05`, and the supervisor-mediated shutdown itself (quarantine,
+# KILL escalation, owner reap) is the sequence under test that must merely be
+# observed to complete. The contract is unchanged: a TERM'd worker with an
+# active job must finish its shutdown; the same 30s deadline this file already
+# uses for the repeatedly signalled worker below only absorbs scheduling slack.
+SHUTDOWN_DEADLINE=$((SECONDS + 30))
+while kill -0 "$WORKER_PID" 2>/dev/null && [ "$SECONDS" -lt "$SHUTDOWN_DEADLINE" ]; do
   sleep 0.05
 done
 kill -0 "$WORKER_PID" 2>/dev/null && fail "the worker did not finish its TERM shutdown"

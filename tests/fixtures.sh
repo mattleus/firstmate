@@ -247,6 +247,13 @@ $intent
 
 ## Firstmate spec
 Exercise the spawn behavior under test.
+
+# Engineering method
+## Required skills
+- tdd
+
+## Agreed testing seams
+- The task launch interface.
 EOF
 }
 

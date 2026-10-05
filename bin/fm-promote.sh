@@ -11,7 +11,9 @@
 # bin/fm-dod-lib.sh, the single owner an ordinary ship brief also uses - the
 # mode-specific Definition of done, so a promoted worker receives exactly the same
 # delivery contract as a briefed one, including the no-mistakes mode's ask-user
-# escalation rule and --yes ban. The instructions also carry `# Task` with
+# escalation rule and --yes ban. Current briefs also contribute their validated
+# Engineering method section, so an updated promotion method reaches the live
+# worker as well as any later replacement. The instructions also carry `# Task` with
 # `## Captain's intent` preserved from the scout brief and promotion's ship-time
 # instructions under `## Firstmate spec`; the scout-time spec remains context but
 # is not relabeled as the ship spec. Promotion refuses leftover `{TASK}` /
@@ -153,6 +155,16 @@ if ! fm_brief_task_content_valid "$SCOUT_BRIEF"; then
   echo "error: $SCOUT_BRIEF must contain nonempty ## Captain's intent and ## Firstmate spec subsections (or a nonempty legacy # Task body) before promotion" >&2
   exit 1
 fi
+if fm_brief_engineering_contract_present "$SCOUT_BRIEF"; then
+  if fm_brief_engineering_placeholders_present "$SCOUT_BRIEF"; then
+    echo "error: $SCOUT_BRIEF still contains {REQUIRED_SKILLS} or {TESTING_SEAMS}; fill ## Required skills and ## Agreed testing seams before promotion" >&2
+    exit 1
+  fi
+  if ! fm_brief_engineering_content_valid "$SCOUT_BRIEF"; then
+    echo "error: $SCOUT_BRIEF must contain nonempty ## Required skills and ## Agreed testing seams under # Engineering method before promotion" >&2
+    exit 1
+  fi
+fi
 if ADDRESS_LINE=$(fm_brief_intent_address_line "$SCOUT_BRIEF"); then
   echo "error: $SCOUT_BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before promotion, since the heading already records provenance" >&2
   exit 1
@@ -166,6 +178,15 @@ fi
 if [ -z "$(printf '%s' "$INTENT_BODY" | tr -d '[:space:]')" ]; then
   echo "error: $SCOUT_BRIEF has no provenance-marked Captain's intent; add the captain's actual words before promotion" >&2
   exit 1
+fi
+ENGINEERING_SECTION=
+if fm_brief_engineering_contract_present "$SCOUT_BRIEF"; then
+  ENGINEERING_BODY=$(fm_brief_heading_body "$SCOUT_BRIEF" "# Engineering method")
+  IFS= read -r -d '' ENGINEERING_SECTION <<EOF || true
+# Engineering method
+$ENGINEERING_BODY
+
+EOF
 fi
 
 # The promoted worker must receive the same delivery contract an ordinary ship
@@ -223,6 +244,7 @@ EOF
 ## Firstmate spec
 $PROMOTION_SHIP_SPEC
 
+$ENGINEERING_SECTION
 EOF
   promote_delivery_contract
 } > "$TMP" || { echo "error: could not render ship instructions for mode=$MODE" >&2; exit 1; }

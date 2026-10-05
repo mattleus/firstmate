@@ -56,6 +56,8 @@ fill_brief_subsections() {  # <file> <intent> <spec>
   content=$(cat "$file")
   content=${content//'{TASK}'/$intent}
   content=${content//'{FIRSTMATE_SPEC}'/$spec}
+  content=${content//'{REQUIRED_SKILLS}'/'- tdd'}
+  content=${content//'{TESTING_SEAMS}'/'- The command-line task launch interface.'}
   printf '%s\n' "$content" > "$file"
 }
 
@@ -354,6 +356,16 @@ STUB
       "$mode: promoted worker did not receive the Captain's intent subsection"
     assert_grep "## Firstmate spec" "$payload" \
       "$mode: promoted worker did not receive the Firstmate spec subsection"
+    assert_grep "# Engineering method" "$payload" \
+      "$mode: promoted worker did not receive the current engineering method"
+    assert_grep "## Required skills" "$payload" \
+      "$mode: promoted worker did not receive its required skill list"
+    assert_grep "- tdd" "$payload" \
+      "$mode: promoted worker did not receive its task-specific required skill"
+    assert_grep "## Agreed testing seams" "$payload" \
+      "$mode: promoted worker did not receive its agreed testing seams"
+    assert_grep "The command-line task launch interface" "$payload" \
+      "$mode: promoted worker did not receive its task-specific testing seam"
 
     # Compare the public outputs of both real generation paths. The promoted
     # payload ends at its Definition of done, as does an ordinary generated
@@ -751,6 +763,45 @@ EOF
   pass "fm-spawn/fm-promote: leftover Task placeholders are refused until both subsections are filled"
 }
 
+# Current scaffolds require task-specific engineering skills and testing seams.
+# Spawn validates only the actual subsection bodies, so literal placeholder
+# examples elsewhere in a completed brief remain ordinary task content.
+test_spawn_requires_filled_engineering_method() {
+  local rec home proj fakebin id brief content out status
+  rec=$(make_home engineering-method)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+
+  id=delivery-unfilled-engineering
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "engineering-method brief should scaffold"
+  brief="$home/data/$id/brief.md"
+  content=$(cat "$brief")
+  content=${content//'{TASK}'/'Implement the launch contract.'}
+  content=${content//'{FIRSTMATE_SPEC}'/'Keep delivery ownership unchanged.'}
+  printf '%s\n' "$content" > "$brief"
+
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn with an unfilled engineering method should exit non-zero"
+  assert_contains "$out" 'still contains {REQUIRED_SKILLS} or {TESTING_SEAMS}' \
+    "spawn did not name the unfilled engineering method"
+  assert_contains "$out" 'fill ## Required skills and ## Agreed testing seams' \
+    "spawn did not identify the engineering subsections to fill"
+  assert_absent "$home/state/$id.meta" "unfilled engineering method wrote task metadata"
+
+  content=${content//'{REQUIRED_SKILLS}'/'- tdd'}
+  content=${content//'{TESTING_SEAMS}'/'- The literal {REQUIRED_SKILLS} and {TESTING_SEAMS} examples in this seam.'}
+  printf '%s\n' "$content" > "$brief"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" 'still contains {REQUIRED_SKILLS} or {TESTING_SEAMS}' \
+    "completed engineering instructions containing literal examples were refused"
+  assert_not_contains "$out" 'must contain nonempty ## Required skills and ## Agreed testing seams' \
+    "completed engineering instructions failed semantic validation"
+  pass "fm-spawn: current briefs require task-specific engineering skills and testing seams"
+}
+
 # Exercise the serialized input a worker is told to pass to no-mistakes, not
 # just the presence of words somewhere in its much larger launch brief.
 # No live model or pipeline is needed: spawn publishes this exact input before
@@ -892,4 +943,5 @@ test_promote_refuses_a_symlinked_task_record
 test_promotion_delivers_the_real_definition_of_done
 test_project_mode_maps_the_conditional_policy
 test_spawn_and_promote_require_filled_task_subsections
+test_spawn_requires_filled_engineering_method
 echo "# all fm-task-delivery tests passed"

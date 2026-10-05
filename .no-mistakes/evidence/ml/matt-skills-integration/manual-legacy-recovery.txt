@@ -1,0 +1,13 @@
+### Scenario: a saved brief that PREDATES the contract (no # Engineering method section) must still be launchable (recovery compatibility)
+
+Drove the real bin/fm-spawn.sh against an isolated FM_HOME with a hand-written pre-contract brief:
+  headings in brief: # Task / ## Captain's intent / ## Firstmate spec / # Definition of done (no Engineering method)
+
+bash -x trace showing spawn consulted the new engineering gate and walked past it (no refusal):
+1014:+ fm_brief_engineering_contract_present /tmp/fm-mp-live4.iT4PMy/home/data/mp-legacy/brief.md
+
+...no "still contains {REQUIRED_SKILLS}..." or "must contain nonempty ## Required skills..." error was emitted;
+spawn progressed to intent-address checks and backlog resolution. It exited only when the fixture backlog
+lacked a matching tasks-axi entry (fixture-setup, unrelated to this change):
+0
+1457:++ out=$'+++ local seconds=10\n+++ shift\n+++ case "$(fm_timeout_mechanism)" in\n++++ fm_timeout_mechanism\n++++ \'[\' \'\' = bash \']\'\n++++ command -v timeout\n++++ command -v gtimeout\n++++ command -v perl\n++++ printf \'perl\\n\'\n+++ perl -e \'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)\' 10 bash -c \'cd "$1" 2>/dev/null || exit 1; shift; exec tasks-axi show "$@"\' _ /private/tmp/fm-mp-live4.iT4PMy/home mp-legacy\nerror: "Task \\"mp-legacy\\" not found in this backlog"\ncode: NOT_FOUND\nhelp[1]: Run `tasks-axi list` to see existing tasks'

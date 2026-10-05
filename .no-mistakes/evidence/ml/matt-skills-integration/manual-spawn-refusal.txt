@@ -1,0 +1,15 @@
+### STEP 1: scaffold a ship brief with bin/fm-brief.sh
+scaffolded: /tmp/fm-mp-live.sDVFC3/home/data/mp-live-ship/brief.md (ship, mode=direct-PR; replace {TASK}, {FIRSTMATE_SPEC}, {REQUIRED_SKILLS}, and {TESTING_SEAMS})
+
+### STEP 2: fill Task subsections only; spawn with engineering placeholders left (adversarial)
+error: /tmp/fm-mp-live.sDVFC3/home/data/mp-live-ship/brief.md still contains {REQUIRED_SKILLS} or {TESTING_SEAMS}; fill ## Required skills and ## Agreed testing seams before spawn
+spawn exit status: 1
+refusal wrote no task metadata
+
+### STEP 3: adversarial - placeholder-looking content elsewhere is fine, but an EMPTY engineering subsection must refuse
+error: /tmp/fm-mp-live.sDVFC3/home/data/mp-live-ship/brief.md must contain nonempty ## Required skills and ## Agreed testing seams under # Engineering method before spawn
+spawn exit status: 1
+
+### STEP 4: hand-written legacy brief (predates the contract, no Engineering method section) still launches
+notice: mp-legacy ships mode=local-only while the standing posture for proj is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+spawn exit status: 1

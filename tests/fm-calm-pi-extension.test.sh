@@ -1299,14 +1299,18 @@ for (const { name, actual } of rows) {
     throw new Error(`${name} was not hidden before export rendering`);
   }
 }
+// Pi 1.0.1 renamed the createToolHtmlRenderer lookup dep from getToolDefinition
+// to getToolRenderers (exportToHtml now resolves renderers through the extension
+// runner). Older Pi destructures the old name and ignores the extra key, so the
+// fixture passes both spellings of the same lookup to cover either era.
+const exportToolHtmlDeps = () => {
+  const lookup = (name) => tools.find((tool) => tool.name === name);
+  return { getToolDefinition: lookup, getToolRenderers: lookup, theme, cwd: process.cwd() };
+};
 async function assertStockHtmlRendering(command, submitData) {
   editorText = command;
   terminalInputHandler(submitData);
-  const htmlRenderer = createToolHtmlRenderer({
-    getToolDefinition: (name) => tools.find((tool) => tool.name === name),
-    theme,
-    cwd: process.cwd(),
-  });
+  const htmlRenderer = createToolHtmlRenderer(exportToolHtmlDeps());
   const exportCases = [
     ...cases.filter(([toolName]) => toolName === "grep" || toolName === "find"),
     ["fm_watch_arm_pi", watchArgs, watchResult],
@@ -1333,11 +1337,7 @@ await assertStockHtmlRendering("/export calm.html", "\r");
 getKeybindings().setUserBindings({ "tui.input.submit": "alt+s" });
 editorText = "/export remapped.html";
 terminalInputHandler("\r");
-const unmatchedRenderer = createToolHtmlRenderer({
-  getToolDefinition: (name) => tools.find((tool) => tool.name === name),
-  theme,
-  cwd: process.cwd(),
-});
+const unmatchedRenderer = createToolHtmlRenderer(exportToolHtmlDeps());
 if (unmatchedRenderer.renderCall("unmatched-submit", "grep", { pattern: "alpha", path: "." })) {
   throw new Error("ordinary non-submit input activated HTML export rendering");
 }

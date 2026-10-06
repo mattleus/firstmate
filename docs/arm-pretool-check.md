@@ -160,7 +160,7 @@ Prose may improve without changing adapter behavior.
 | Codex | `.tool_input.command` | The `.codex/hooks.json` command forwards the complete stdin payload and Codex blocks on exit 2. |
 | Claude | `.tool_input.command` | `.claude/settings.json` forwards stdin with `--claude`, leaving stdout empty and returning the stderr deny object. |
 | Grok | `.toolInput.command` | `.grok/hooks/fm-primary-pretool-check.json` forwards stdin and Grok consumes the stdout `decision=deny` object. |
-| OpenCode | `output.args.command` | `.opencode/plugins/fm-primary-pretool-check.js` passes one `--command` argument and throws only for exit 2. |
+| OpenCode | `event.input.command` | `.opencode/plugins/fm-primary-pretool-check.js` passes one `--command` argument from the V2 `ctx.tool.hook("execute.before")` event and throws only for exit 2. |
 | Pi / pi-signed | `event.input.command` | `.pi/extensions/fm-primary-turnend-guard.ts` passes one `--command` argument and returns `{block: true}` only for exit 2. |
 | omp | `event.input.command` | `.omp/extensions/fm-primary-turnend-guard.ts` passes one `--command` argument and returns `{block: true, reason}` only for exit 2; omp surfaces the reason verbatim to the model (verified 18.1.2). |
 | Cursor | `.tool_input.command` | `.cursor/hooks.json` matches `tool_name` `Shell` and forwards stdin with `--cursor`. Cursor reads the RETURNED object rather than the exit status, so `--cursor` prints `{"permission":"deny","user_message":"[code] reason"}` on stdout and exits 0; only that rendering is verified to block the command and surface the reason. |
@@ -189,6 +189,8 @@ grok 0.2.93 (f00f96316d4b)
 OpenCode 1.17.15
 Pi 0.80.5
 ```
+
+The OpenCode guarantee was refreshed on 2026-10-05 against OpenCode 2.0.23 after the plugin moved to the V2 API: the hook is `ctx.tool.hook("execute.before")`, the tool is named `shell`, and the deny path again blocked a live command with the checker's message surfaced as the failed tool result.
 
 Every harness was instructed to issue these exact shell command strings as separate tool calls:
 

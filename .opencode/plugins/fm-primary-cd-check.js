@@ -6,9 +6,9 @@ import { spawn } from "node:child_process";
 // the primary firstmate checkout before the agent's bash tool relocates the
 // shell out of the home (see bin/fm-cd-pretool-check.sh and docs/cd-guard.md).
 // This mirrors fm-primary-pretool-check.js, calling the cd-guard owner instead
-// of the watcher-arm one. tool.execute.before can block by throwing (verified
-// 2026-07-09 against OpenCode 1.17.15 for the watcher-arm plugin; the same
-// mechanism carries this guard). The owner script is itself inert outside the
+// of the watcher-arm one, and shares its throw-to-block contract (validated
+// live against OpenCode 2.0.23 on 2026-10-05; matching both the V2 "shell"
+// tool name and V1's "bash"). The owner script is itself inert outside the
 // real primary checkout, so a crewmate/scout worktree is never affected.
 
 function runProcess(command, args) {
@@ -39,19 +39,14 @@ async function resolveRoot(anchor) {
   }
 }
 
-export const FmPrimaryCdCheck = async ({ directory, worktree }) => {
-  const root = worktree ? (() => {
-    try {
-      return realpathSync(worktree);
-    } catch {
-      return resolve(worktree);
-    }
-  })() : await resolveRoot(directory);
+export default {
+  id: "fm-primary-cd-check",
+  async setup(ctx) {
+    const root = await resolveRoot(ctx.location.directory);
 
-  return {
-    "tool.execute.before": async (input, output) => {
-      if (!root || input?.tool !== "bash") return;
-      const command = output?.args?.command;
+    await ctx.tool.hook("execute.before", async (event) => {
+      if (!root || (event.tool !== "shell" && event.tool !== "bash")) return;
+      const command = event.input?.command;
       if (!command || typeof command !== "string") return;
 
       const result = await runProcess(`${root}/bin/fm-cd-pretool-check.sh`, ["--command", command]);
@@ -59,6 +54,6 @@ export const FmPrimaryCdCheck = async ({ directory, worktree }) => {
 
       const reason = result.stderr.trim() || "denied by the cd-guard PreToolUse seatbelt";
       throw new Error(reason);
-    },
-  };
+    });
+  },
 };

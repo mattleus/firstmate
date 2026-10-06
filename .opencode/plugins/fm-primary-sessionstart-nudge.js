@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { eventMatchesRoot } from "./lib/fm-event-location.js";
 
 const handledSessions = new Set();
 
@@ -32,29 +33,28 @@ async function resolveRoot(anchor) {
   return resolvePath(anchor);
 }
 
-export const FmPrimarySessionstartNudge = async ({ client, directory, worktree }) => {
-  const root = worktree ? resolvePath(worktree) : await resolveRoot(directory);
+export default {
+  id: "fm-primary-sessionstart-nudge",
+  setup(ctx) {
+    const controller = new AbortController();
+    void (async () => {
+      const root = await resolveRoot(ctx.location.directory);
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        if (event.type !== "session.created") continue;
+        if (!eventMatchesRoot(event, root)) continue;
+        const sessionID = event.durable?.aggregateID ?? event.data?.sessionID;
+        if (!sessionID || handledSessions.has(sessionID) || !root) continue;
+        handledSessions.add(sessionID);
 
-  return {
-    event: async ({ event }) => {
-      if (event.type !== "session.created") return;
-      const sessionID = event.properties?.info?.id ?? event.properties?.sessionID;
-      if (!sessionID || handledSessions.has(sessionID) || !root) return;
-      handledSessions.add(sessionID);
+        const result = await runProcess(`${root}/bin/fm-sessionstart-nudge.sh`, []);
+        const nudge = result.code === 0 ? result.stdout.trim() : "";
+        if (!nudge) continue;
 
-      const result = await runProcess(`${root}/bin/fm-sessionstart-nudge.sh`, []);
-      const nudge = result.code === 0 ? result.stdout.trim() : "";
-      if (!nudge) return;
-
-      try {
-        await client.session.promptAsync({
-          path: { id: sessionID },
-          body: {
-            parts: [{ type: "text", text: nudge }],
-          },
-        });
-      } catch {
+        try {
+          await ctx.session.prompt({ sessionID, text: nudge });
+        } catch {}
       }
-    },
-  };
+    })().catch(() => {});
+    return () => controller.abort();
+  },
 };

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
@@ -29,6 +29,7 @@ const ARM_RETIRE_TIMEOUT_MS = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 
 const REARM_RETRY_BASE_MS = positiveInteger("FM_WATCH_REARM_RETRY_BASE_MS", 250);
 const REARM_RETRY_MAX_MS = positiveInteger("FM_WATCH_REARM_RETRY_MAX_MS", 4000);
 const REARM_RETRY_LIMIT = positiveInteger("FM_WATCH_REARM_RETRY_LIMIT", 5);
+const DIAGNOSTIC_DEDUPE_MS = positiveInteger("FM_WATCH_DIAGNOSTIC_DEDUPE_MS", 300000);
 
 let child = null;
 let armStatus = "idle";
@@ -84,6 +85,22 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+function expireStaleMarker(marker) {
+  let mtime = 0;
+  try {
+    mtime = statSync(marker).mtimeMs;
+  } catch {
+    return false;
+  }
+  if (Date.now() - mtime < DIAGNOSTIC_DEDUPE_MS) return false;
+  try {
+    unlinkSync(marker);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 function publishDiagnostic(paths, detail) {
   const message = `check: OpenCode watcher continuity failure: ${String(detail).trim() || "unknown failure"}`;
   const digest = createHash("sha256").update(message).digest("hex").slice(0, 24);
@@ -91,8 +108,12 @@ function publishDiagnostic(paths, detail) {
   try {
     writeFileSync(marker, `${message}\n`, { flag: "wx" });
   } catch (error) {
-    if (error?.code === "EEXIST") return;
-    return;
+    if (error?.code !== "EEXIST" || !expireStaleMarker(marker)) return;
+    try {
+      writeFileSync(marker, `${message}\n`, { flag: "wx" });
+    } catch {
+      return;
+    }
   }
   const script = [
     'set -u',
@@ -591,9 +612,7 @@ export default {
         const sessionID = event.data?.sessionID;
         if (!sessionID) continue;
         void ensureArm(paths, sessionID, ctx).catch((error) => {
-          const reason = `OpenCode watcher arm failed: ${String(error?.message ?? error)}`;
-          publishDiagnostic(paths, reason);
-          surfaceFailure(paths, ctx, sessionID, `watcher: FAILED - ${reason}`);
+          surfaceFailure(paths, ctx, sessionID, `watcher: FAILED - OpenCode watcher arm failed: ${String(error?.message ?? error)}`);
         });
       }
     })().catch((error) => {

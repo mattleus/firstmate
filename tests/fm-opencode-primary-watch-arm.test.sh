@@ -17,7 +17,7 @@ make_fixture() {
   printf '%s\t%s\n' "$repo" "$home"
 }
 
-test_prompt_failure_publishes_one_durable_diagnostic() {
+test_prompt_failure_publishes_durable_diagnostics() {
   local fixture repo home log stop out status
   fixture=$(make_fixture prompt-failure)
   repo=${fixture%%$'\t'*}
@@ -49,20 +49,33 @@ const hooks = mod.default.setup({
   location: { directory: process.env.WORKTREE },
   event: { subscribe: async function* () { yield { type: "session.idle", data: { sessionID: "session-test" } }; await new Promise(() => {}); } },
 });
-for (let i = 0; i < 500 && !existsSync(`${process.env.FM_ARM_LOG}`); i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-for (let i = 0; i < 500 && !existsSync(`${process.env.FM_HOME}/state/.wake-queue`); i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-const queue = readFileSync(`${process.env.FM_HOME}/state/.wake-queue`, "utf8");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const queuePath = `${process.env.FM_HOME}/state/.wake-queue`;
+const countOccurrences = (text, needle) => text.split(needle).length - 1;
+for (let i = 0; i < 500 && !existsSync(`${process.env.FM_ARM_LOG}`); i += 1) await sleep(10);
+let queue = "";
+for (let i = 0; i < 500; i += 1) {
+  if (existsSync(queuePath)) {
+    queue = readFileSync(queuePath, "utf8");
+    if (queue.includes("prompt delivery failed")) break;
+  }
+  await sleep(10);
+}
 if (!queue.includes("OpenCode watcher continuity failure")) throw new Error(`missing durable prompt failure: ${queue}`);
+if (!queue.includes("could not deliver an actionable wake")) throw new Error(`missing wake failure detail: ${queue}`);
+if (!queue.includes("prompt delivery failed")) throw new Error(`missing durable delivery failure: ${queue}`);
 const rows = queue.trim().split("\n");
-if (rows.length !== 1) throw new Error(`prompt failure was repeated: ${queue}`);
+if (rows.length !== 2) throw new Error(`expected each failure exactly once: ${queue}`);
+if (countOccurrences(queue, "could not deliver an actionable wake") !== 1) throw new Error(`prompt failure was repeated: ${queue}`);
+if (countOccurrences(queue, "prompt delivery failed") !== 1) throw new Error(`delivery failure was repeated: ${queue}`);
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 hooks();
 EOF
   )
   status=$?
-  expect_code 0 "$status" "OpenCode prompt failures must publish one durable diagnostic: $out"
+  expect_code 0 "$status" "OpenCode prompt failures must publish durable diagnostics: $out"
   [ -z "$out" ] || fail "OpenCode prompt failure test printed output: $out"
-  pass "OpenCode prompt failure publishes one durable diagnostic"
+  pass "OpenCode prompt failure publishes durable diagnostics"
 }
 
 test_plugin_initialization_failure_publishes_durable_diagnostic() {
@@ -133,6 +146,49 @@ EOF
   pass "OpenCode missing successor surfaces a durable terminal failure"
 }
 
-test_prompt_failure_publishes_one_durable_diagnostic
+test_dedupe_marker_expiry_republishes_identical_diagnostic() {
+  local fixture repo home out status
+  fixture=$(make_fixture dedupe-expiry)
+  repo=${fixture%%$'\t'*}
+  home=${fixture#*$'\t'}
+  out=$(PLUGIN="$PLUGIN" WORKTREE="$repo" FM_HOME="$home" node 2>&1 <<'EOF'
+import { existsSync, readFileSync, readdirSync, utimesSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const setupPlugin = () => mod.default.setup({
+  location: { directory: process.env.WORKTREE },
+  event: { subscribe: async function* () { throw new Error("event stream unavailable"); } },
+});
+const stateDir = `${process.env.FM_HOME}/state`;
+const queuePath = `${stateDir}/.wake-queue`;
+const readRows = () => (existsSync(queuePath) ? readFileSync(queuePath, "utf8").trim().split("\n").filter(Boolean) : []);
+setupPlugin();
+for (let i = 0; i < 500 && readRows().length === 0; i += 1) await sleep(10);
+if (!readRows()[0]?.includes("plugin initialization failed")) throw new Error("missing first durable initialization failure");
+setupPlugin();
+await sleep(1500);
+if (readRows().length !== 1) throw new Error(`identical failure inside the dedupe window was repeated: ${readRows().join("\n")}`);
+const markers = readdirSync(stateDir).filter((name) => name.startsWith(".opencode-watch-diagnostic-"));
+if (markers.length !== 1) throw new Error(`expected one dedupe marker: ${markers.join(", ")}`);
+const stale = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+utimesSync(`${stateDir}/${markers[0]}`, stale, stale);
+setupPlugin();
+for (let i = 0; i < 500 && readRows().length < 2; i += 1) await sleep(10);
+const rows = readRows();
+if (rows.length !== 2 || !rows[1].includes("plugin initialization failed")) {
+  throw new Error(`expired marker did not republish the recurring failure: ${rows.join("\n")}`);
+}
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "OpenCode diagnostic dedupe markers must expire: $out"
+  [ -z "$out" ] || fail "OpenCode dedupe expiry test printed output: $out"
+  pass "OpenCode dedupe marker expiry republishes an identical diagnostic"
+}
+
+test_prompt_failure_publishes_durable_diagnostics
 test_plugin_initialization_failure_publishes_durable_diagnostic
 test_missing_successor_surfaces_durable_terminal_failure
+test_dedupe_marker_expiry_republishes_identical_diagnostic

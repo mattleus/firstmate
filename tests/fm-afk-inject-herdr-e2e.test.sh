@@ -59,93 +59,17 @@ SUPERVISOR_TARGET=
 PANE_ID=
 LOOP_SCRIPT=
 
-# Hard bound for every herdr CLI call made through the shim below, and the
-# join budget for a TERM'd supervise daemon. A wedged herdr server socket
-# makes an unbounded CLI call (or the daemon blocked inside one) hang this
-# script with no per-command evidence until its caller's whole-step tripwire
-# fires (observed on CI run 37309436481: a 20-minute blind step timeout). 30s
-# is two orders of magnitude over a healthy round trip against a real lab, so
-# a bound hit names a genuine wedge, not scheduling slack.
-HERDR_CMD_BOUND_SECS=30
-
-# join_daemon: TERM the supervise daemon and wait for it to exit, escalating
-# to KILL after HERDR_CMD_BOUND_SECS rather than waiting without bound - the
-# daemon can outlive TERM indefinitely while it is blocked inside a wedged
-# herdr call. Returns 1 when escalation was needed, so callers can name the
-# timeout instead of dying blind inside `wait`.
-join_daemon() {
-  local waited=0
-  [ -n "${DAEMON_PID:-}" ] || return 0
-  kill "$DAEMON_PID" 2>/dev/null || true
-  while kill -0 "$DAEMON_PID" 2>/dev/null && [ "$waited" -lt "$HERDR_CMD_BOUND_SECS" ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
-  if kill -0 "$DAEMON_PID" 2>/dev/null; then
-    kill -KILL "$DAEMON_PID" 2>/dev/null || true
-    wait "$DAEMON_PID" 2>/dev/null || true
-    DAEMON_PID=
-    return 1
-  fi
-  wait "$DAEMON_PID" 2>/dev/null || true
-  DAEMON_PID=
-  return 0
-}
-
 cleanup_all() {
   if [ -n "${DAEMON_PID:-}" ]; then
     afk_exit "${STATE_DIR:-}" 2>/dev/null || true
-    join_daemon || printf 'cleanup: supervise daemon did not exit within %ss of TERM; killed\n' "$HERDR_CMD_BOUND_SECS" >&2
+    kill "$DAEMON_PID" 2>/dev/null || true
+    wait "$DAEMON_PID" 2>/dev/null || true
   fi
   herdr_safe_stop_and_delete "$SESSION" 2>/dev/null || true
   rm -rf "${HERDR_SHIM_DIR:-}" 2>/dev/null || true
   rm -rf "${STATE_DIR:-}" 2>/dev/null || true
 }
 trap cleanup_all EXIT
-
-STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-herdr-e2e.XXXXXX")
-mkdir -p "$STATE_DIR"
-LOG_FILE="$STATE_DIR/submitted.log"
-: > "$LOG_FILE"
-
-# --- herdr shim: forwards to the real binary, optionally swallows one Enter,
-# and bounds every other call -------------------------------------------------
-# The swallow-half intercepts exactly one `pane send-keys <pane> enter` while
-# Scenario B's .swallow-enter flag file exists (herdr's real CLI has no
-# built-in way to drop a keystroke). The bound-half wraps every remaining call
-# in fm-timeout-lib.sh's fm_run_timed so a wedged herdr server becomes a named
-# per-command failure (exit 124, the exceeded bound named on stderr) instead
-# of an unbounded suite hang. The long-lived `server` launch is exempt: the
-# lab server under test must outlive any single call's bound. The shim sits
-# first on PATH for the rest of the run, so lab provisioning (fm-herdr-lab),
-# backend adapter operations, the supervise daemon and the supervisor pane's
-# own herdr calls (both inherit this PATH), and teardown all sit under it.
-REAL_HERDR=$(command -v herdr)
-HERDR_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-shim.XXXXXX")
-cat > "$HERDR_SHIM_DIR/herdr" <<SHIM
-#!/usr/bin/env bash
-if [ "\${1:-}" = "pane" ] && [ "\${2:-}" = "send-keys" ] && [ -f "$STATE_DIR/.swallow-enter" ]; then
-  found_enter=0
-  for _a in "\$@"; do [ "\$_a" = "enter" ] && found_enter=1; done
-  if [ "\$found_enter" = 1 ]; then
-    rm -f "$STATE_DIR/.swallow-enter"
-    exit 0
-  fi
-fi
-if [ "\${1:-}" = "server" ]; then
-  exec "$REAL_HERDR" "\$@"
-fi
-. "$ROOT/bin/fm-timeout-lib.sh"
-rc=0
-fm_run_timed $HERDR_CMD_BOUND_SECS "$REAL_HERDR" "\$@" || rc=\$?
-if [ "\$rc" -eq 124 ]; then
-  echo "herdr \$* exceeded the ${HERDR_CMD_BOUND_SECS}s command bound (wedged herdr server?)" >&2
-fi
-exit "\$rc"
-SHIM
-chmod +x "$HERDR_SHIM_DIR/herdr"
-export PATH="$HERDR_SHIM_DIR:$PATH"
-
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"
 
 # --- source the daemon (for afk_enter/afk_exit/FM_INJECT_MARK) + the backend -
@@ -156,6 +80,11 @@ fm_backend_source herdr || fail "fm_backend_source herdr failed"
 # --- build the isolated session's supervisor pane ----------------------------
 
 fm_backend_herdr_version_check || fail "version_check failed against the real installed herdr"
+
+STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-herdr-e2e.XXXXXX")
+mkdir -p "$STATE_DIR"
+LOG_FILE="$STATE_DIR/submitted.log"
+: > "$LOG_FILE"
 
 CONTAINER_RAW=$(fm_backend_herdr_container_ensure /tmp) || fail "container_ensure failed"
 CONTAINER=${CONTAINER_RAW%%$'\t'*}
@@ -304,6 +233,23 @@ fm_backend_herdr_send_text_line "$SUPERVISOR_TARGET" "bash '$LOOP_SCRIPT' '$LOG_
   || fail "could not start the supervisor-loop script in the scratch herdr pane"
 sleep 1  # let the loop start and settle
 
+# --- herdr shim: forwards to the real binary, optionally swallows one Enter --
+REAL_HERDR=$(command -v herdr)
+HERDR_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-herdr-shim.XXXXXX")
+cat > "$HERDR_SHIM_DIR/herdr" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = "pane" ] && [ "\${2:-}" = "send-keys" ] && [ -f "$STATE_DIR/.swallow-enter" ]; then
+  found_enter=0
+  for _a in "\$@"; do [ "\$_a" = "enter" ] && found_enter=1; done
+  if [ "\$found_enter" = 1 ]; then
+    rm -f "$STATE_DIR/.swallow-enter"
+    exit 0
+  fi
+fi
+exec "$REAL_HERDR" "\$@"
+SHIM
+chmod +x "$HERDR_SHIM_DIR/herdr"
+
 wait_daemon_started() {
   local label=${1:-daemon} start_line=${2:-0} i=0 new_log
   while [ "$i" -lt 30 ]; do
@@ -324,9 +270,14 @@ wait_daemon_started() {
   fail "$label did not record backend=herdr after 6s: $new_log"
 }
 
+# The fixture pane is no real harness; pinning "unknown" keeps the typed U+2063
+# envelope whatever harness runs this test (a claude ancestry would select the
+# record-backed doorbell, which tests/fm-afk-inject-e2e.test.sh covers).
 start_daemon() {
   local log_start=0
   [ ! -f "$STATE_DIR/.supervise-daemon.log" ] || log_start=$(wc -l < "$STATE_DIR/.supervise-daemon.log")
+  FM_DAEMON_PRIMARY_HARNESS=unknown \
+  PATH="$HERDR_SHIM_DIR:$PATH" \
   HERDR_SESSION="$SESSION" \
   FM_STATE_OVERRIDE="$STATE_DIR" \
   FM_SUPERVISOR_BACKEND=herdr \
@@ -348,7 +299,9 @@ start_daemon() {
 stop_daemon() {
   [ -n "${DAEMON_PID:-}" ] || return 0
   afk_exit "$STATE_DIR" 2>/dev/null || true
-  join_daemon || fail "the supervise daemon did not exit within ${HERDR_CMD_BOUND_SECS}s of TERM (wedged inside a herdr call?); it was killed"
+  kill "$DAEMON_PID" 2>/dev/null || true
+  wait "$DAEMON_PID" 2>/dev/null || true
+  DAEMON_PID=""
   sleep 1
 }
 
@@ -379,7 +332,7 @@ selfcheck_pane_input_pending() {
   fm_backend_herdr_send_literal "$SUPERVISOR_TARGET" "$check_text" \
     || fail "selfcheck: could not send literal text to the scratch pane"
   sleep 0.5
-  if pane_input_pending "$SUPERVISOR_TARGET" herdr; then
+  if PATH="$HERDR_SHIM_DIR:$PATH" pane_input_pending "$SUPERVISOR_TARGET" herdr; then
     fm_backend_herdr_send_key "$SUPERVISOR_TARGET" Enter
     sleep 0.5
     return 0
@@ -535,6 +488,8 @@ test_scenario_d_max_defer() {
   fm_backend_herdr_send_literal "$SUPERVISOR_TARGET" "stuck-in-the-box"
   sleep 0.5
 
+  FM_DAEMON_PRIMARY_HARNESS=unknown \
+  PATH="$HERDR_SHIM_DIR:$PATH" \
   HERDR_SESSION="$SESSION" \
   FM_STATE_OVERRIDE="$STATE_DIR" \
   FM_SUPERVISOR_BACKEND=herdr \

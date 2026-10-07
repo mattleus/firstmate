@@ -1,0 +1,8 @@
+not ok - OpenCode prompt failures must publish durable diagnostics: file:///Users/matt/.no-mistakes/worktrees/e1a436203903/01M4C3TFF7JZWJH2AV0MVPTEJF/[eval1]:23
+if (!queue.includes("OpenCode watcher continuity failure")) throw new Error(`missing durable prompt failure: ${queue}`);
+                                                                  ^
+
+Error: missing durable prompt failure: 
+    at file:///Users/matt/.no-mistakes/worktrees/e1a436203903/01M4C3TFF7JZWJH2AV0MVPTEJF/[eval1]:23:67
+
+Node.js v25.4.0: expected exit 0, got 1

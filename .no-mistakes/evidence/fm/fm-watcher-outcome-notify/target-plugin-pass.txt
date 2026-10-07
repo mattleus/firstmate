@@ -1,0 +1,4 @@
+ok - OpenCode prompt failure publishes durable diagnostics
+ok - OpenCode plugin initialization failure publishes a durable diagnostic
+ok - OpenCode missing successor surfaces a durable terminal failure
+ok - OpenCode dedupe marker expiry republishes an identical diagnostic

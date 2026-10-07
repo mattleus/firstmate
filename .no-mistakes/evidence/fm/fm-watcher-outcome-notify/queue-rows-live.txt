@@ -1,0 +1,12 @@
+--- durable wake queue rows persisted by real bin/fm-wake-lib.sh ---
+1791408492	1	check	opencode-watch:cc2850cc53d73c373cb31980	check: OpenCode watcher continuity failure: watcher: FAILED - OpenCode could not deliver an actionable wake Cannot read properties of undefined (reading 'prompt')
+1791408492	2	check	opencode-watch:2edbd265a0c9e762d74207b7	check: OpenCode watcher continuity failure: prompt delivery failed: Cannot read properties of undefined (reading 'prompt')
+--- dedupe marker files in state dir ---
+.opencode-watch-diagnostic-2edbd265a0c9e762d74207b7
+.opencode-watch-diagnostic-cc2850cc53d73c373cb31980
+--- marker contents ---
+== .opencode-watch-diagnostic-2edbd265a0c9e762d74207b7
+check: OpenCode watcher continuity failure: prompt delivery failed: Cannot read properties of undefined (reading 'prompt')
+== .opencode-watch-diagnostic-cc2850cc53d73c373cb31980
+check: OpenCode watcher continuity failure: watcher: FAILED - OpenCode could not deliver an actionable wake
+Cannot read properties of undefined (reading 'prompt')

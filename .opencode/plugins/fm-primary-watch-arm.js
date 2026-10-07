@@ -85,14 +85,16 @@ function runProcess(command, args, options = {}) {
   });
 }
 
-function expireStaleMarker(marker) {
-  let mtime = 0;
+function markerIsStale(marker, now) {
   try {
-    mtime = statSync(marker).mtimeMs;
+    return now - statSync(marker).mtimeMs >= DIAGNOSTIC_DEDUPE_MS;
   } catch {
     return false;
   }
-  if (Date.now() - mtime < DIAGNOSTIC_DEDUPE_MS) return false;
+}
+
+function expireStaleMarker(marker) {
+  if (!markerIsStale(marker, Date.now())) return false;
   try {
     unlinkSync(marker);
   } catch {
@@ -101,10 +103,27 @@ function expireStaleMarker(marker) {
   return true;
 }
 
+function sweepStaleMarkers(state) {
+  let names;
+  try {
+    names = readdirSync(state);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const name of names) {
+    if (!name.startsWith(".opencode-watch-diagnostic-") || !markerIsStale(`${state}/${name}`, now)) continue;
+    try {
+      unlinkSync(`${state}/${name}`);
+    } catch {}
+  }
+}
+
 function publishDiagnostic(paths, detail) {
   const message = `check: OpenCode watcher continuity failure: ${String(detail).trim() || "unknown failure"}`;
   const digest = createHash("sha256").update(message).digest("hex").slice(0, 24);
   const marker = `${paths.state}/.opencode-watch-diagnostic-${digest}`;
+  sweepStaleMarkers(paths.state);
   try {
     writeFileSync(marker, `${message}\n`, { flag: "wx" });
   } catch (error) {

@@ -152,7 +152,7 @@ test_dedupe_marker_expiry_republishes_identical_diagnostic() {
   repo=${fixture%%$'\t'*}
   home=${fixture#*$'\t'}
   out=$(PLUGIN="$PLUGIN" WORKTREE="$repo" FM_HOME="$home" node 2>&1 <<'EOF'
-import { existsSync, readFileSync, readdirSync, utimesSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -164,21 +164,28 @@ const setupPlugin = () => mod.default.setup({
 const stateDir = `${process.env.FM_HOME}/state`;
 const queuePath = `${stateDir}/.wake-queue`;
 const readRows = () => (existsSync(queuePath) ? readFileSync(queuePath, "utf8").trim().split("\n").filter(Boolean) : []);
+const readMarkers = () => readdirSync(stateDir).filter((name) => name.startsWith(".opencode-watch-diagnostic-"));
 setupPlugin();
 for (let i = 0; i < 500 && readRows().length === 0; i += 1) await sleep(10);
 if (!readRows()[0]?.includes("plugin initialization failed")) throw new Error("missing first durable initialization failure");
 setupPlugin();
 await sleep(1500);
 if (readRows().length !== 1) throw new Error(`identical failure inside the dedupe window was repeated: ${readRows().join("\n")}`);
-const markers = readdirSync(stateDir).filter((name) => name.startsWith(".opencode-watch-diagnostic-"));
+const markers = readMarkers();
 if (markers.length !== 1) throw new Error(`expected one dedupe marker: ${markers.join(", ")}`);
 const stale = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
 utimesSync(`${stateDir}/${markers[0]}`, stale, stale);
+writeFileSync(`${stateDir}/.opencode-watch-diagnostic-staleleftover`, "stale\n");
+utimesSync(`${stateDir}/.opencode-watch-diagnostic-staleleftover`, stale, stale);
 setupPlugin();
 for (let i = 0; i < 500 && readRows().length < 2; i += 1) await sleep(10);
 const rows = readRows();
 if (rows.length !== 2 || !rows[1].includes("plugin initialization failed")) {
   throw new Error(`expired marker did not republish the recurring failure: ${rows.join("\n")}`);
+}
+const remaining = readMarkers();
+if (remaining.length !== 1 || remaining.includes(".opencode-watch-diagnostic-staleleftover")) {
+  throw new Error(`stale dedupe markers were not swept: ${remaining.join(", ")}`);
 }
 EOF
   )

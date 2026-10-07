@@ -1,0 +1,11 @@
+=== Prompt-delivery-failure scenario: identical driver, base plugin vs target plugin ===
+
+--- BASE (687d414, pre-fix): arm ran; prompt rejected; wake queue =
+""
+=> BUG REPRODUCED: watcher continuity failure diagnostic silently dropped
+
+--- TARGET (f9d00aa, post-fix): durable wake-queue rows =
+1791407169	1	check	opencode-watch:cc2850cc53d73c373cb31980	check: OpenCode watcher continuity failure: watcher: FAILED - OpenCode could not deliver an actionable wake Cannot read properties of undefined (reading 'prompt')
+1791407169	2	check	opencode-watch:2edbd265a0c9e762d74207b7	check: OpenCode watcher continuity failure: prompt delivery failed: Cannot read properties of undefined (reading 'prompt')
+
+Rows use the downstream 'check' kind with opencode-watch:<digest> keys appended via fm_wake_append - the same channel bin/fm-watch.sh uses for watcher outcome notification. Diagnostic details (wake failure + prompt delivery failure cause) are preserved on the watcher outcome.

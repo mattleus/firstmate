@@ -149,6 +149,9 @@ The Pi extension diagnostic log is opt-in and off by default: only a positive FM
 docs/configuration.md owns the knob's default and accepted values.
 A failed confirmation is never swallowed.
 
+OpenCode additionally preserves the diagnostic itself, not only the typed wake: an arm error, an undeliverable prompt, an exhausted restoration, or a plugin initialization failure each appends one durable `check: OpenCode watcher continuity failure` queue row carrying the exact detail, so the outcome reaches the drain even when the prompt path drops it.
+Identical diagnostics publish exactly one row per window - [`configuration.md`](configuration.md) owns the window's knob and default - after which the stale marker is swept and a recurring failure surfaces again.
+
 ### Readiness timeout and retry
 
 The adapter waits at most one readiness timeout per attempt.
@@ -434,6 +437,8 @@ The same suite covers ordinary same-process session replacement for `/new`, `/re
 - A mid-restore marker advance that delivers the wake with no rejection appendix, offers it to an accepting supervision branch like a confirmed delivery, and records the attempt and the confirm result in the bounded extension log when opted in.
 - A failed confirmation for a stale successor that spares a newer arm started by a repair.
 - A repair, a scheduled retry, and a deferred close over a dead-but-unclosed arm child that each start a fresh arm instead of stalling.
+
+`tests/fm-opencode-primary-watch-arm.test.sh` pins the OpenCode durable-diagnostic contract against the real plugin: a prompt that always rejects still leaves one durable row for the failed wake and one for the delivery failure, a refused event stream leaves one initialization-failure row, an unrestorable successor surfaces its retry detail durably, and an identical diagnostic is republished only after its dedupe marker expires while the next publication sweeps other stale markers.
 
 The guard and session-start suites prove that active generation evidence tolerates a fresh-beacon handoff.
 They also prove that a legacy or handoff-phase watcher marker from an absent replacement extension still raises the outage diagnostic.

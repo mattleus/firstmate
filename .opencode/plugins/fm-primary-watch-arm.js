@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.js";
 import { eventMatchesRoot } from "./lib/fm-event-location.js";
@@ -81,6 +82,37 @@ function runProcess(command, args, options = {}) {
     proc.on("error", (error) => resolve({ code: 127, stdout, stderr: String(error?.message ?? error) }));
     proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
   });
+}
+
+function publishDiagnostic(paths, detail) {
+  const message = `check: OpenCode watcher continuity failure: ${String(detail).trim() || "unknown failure"}`;
+  const digest = createHash("sha256").update(message).digest("hex").slice(0, 24);
+  const marker = `${paths.state}/.opencode-watch-diagnostic-${digest}`;
+  try {
+    writeFileSync(marker, `${message}\n`, { flag: "wx" });
+  } catch (error) {
+    if (error?.code === "EEXIST") return;
+    return;
+  }
+  const script = [
+    'set -u',
+    'root=$1 home=$2 state=$3 key=$4 message=$5',
+    'FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_ROOT_OVERRIDE="$root"',
+    '. "$root/bin/fm-wake-lib.sh"',
+    'fm_wake_append check "$key" "$message"',
+  ].join("; ");
+  const result = spawnSync("bash", ["-c", script, "fm-opencode-watch-diagnostic", paths.root, paths.home, paths.state, `opencode-watch:${digest}`, message], {
+    cwd: paths.root,
+    encoding: "utf8",
+    env: { ...process.env, FM_HOME: paths.home, FM_STATE_OVERRIDE: paths.state, FM_ROOT_OVERRIDE: paths.root },
+  });
+  if (result.status !== 0) {
+    try {
+      unlinkSync(marker);
+    } catch {
+      // The diagnostic remains durably marked if its queue publication raced.
+    }
+  }
 }
 
 async function resolveRoot(anchor) {
@@ -307,8 +339,9 @@ function wakePrompt(reason) {
 }
 
 function surfaceFailure(paths, client, sessionID, reason) {
-  void sendPrompt(paths, client, sessionID, wakePrompt(reason)).catch(() => {
-    // OpenCode owns delivery errors; continuity restoration never waits on prompting.
+  publishDiagnostic(paths, reason);
+  void sendPrompt(paths, client, sessionID, wakePrompt(reason)).catch((error) => {
+    publishDiagnostic(paths, `prompt delivery failed: ${String(error?.message ?? error)}`);
   });
 }
 
@@ -463,6 +496,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
       void restoration.then(async (result) => {
         try {
           const message = result.failure ? `${classification.message}\n\n${result.failure}` : classification.message;
+          if (result.failure) publishDiagnostic(paths, result.failure);
           await deliverActionableWake(paths, client, sessionID, message, result.recovery);
         } finally {
           if (restorationInFlight === restoration) restorationInFlight = null;
@@ -543,9 +577,10 @@ export default {
   id: "fm-primary-watch-arm",
   setup(ctx) {
     const controller = new AbortController();
+    let paths = effectivePaths(resolvePath(ctx.location?.directory || process.cwd()));
     void (async () => {
       const root = await resolveRoot(ctx.location.directory);
-      const paths = effectivePaths(root);
+      paths = effectivePaths(root);
       globalThis[COORDINATOR_KEY] = {
         ensureArmed: (sessionID, activeCtx) => ensureArm(paths, sessionID, activeCtx ?? ctx),
       };
@@ -555,9 +590,15 @@ export default {
         if (!eventMatchesRoot(event, root)) continue;
         const sessionID = event.data?.sessionID;
         if (!sessionID) continue;
-        void ensureArm(paths, sessionID, ctx);
+        void ensureArm(paths, sessionID, ctx).catch((error) => {
+          const reason = `OpenCode watcher arm failed: ${String(error?.message ?? error)}`;
+          publishDiagnostic(paths, reason);
+          surfaceFailure(paths, ctx, sessionID, `watcher: FAILED - ${reason}`);
+        });
       }
-    })().catch(() => {});
+    })().catch((error) => {
+      publishDiagnostic(paths, `OpenCode watcher plugin initialization failed: ${String(error?.message ?? error)}`);
+    });
     return () => controller.abort();
   },
 };

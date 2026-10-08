@@ -1471,11 +1471,13 @@ fm_firstmate_root_home() {
 # because their workers run on another machine.
 #
 # Sets FM_LOCAL_FIRSTMATE_STATES to that list, <first-state> first and without
-# duplicates however each directory is spelled. Returns 1 with
-# FM_LOCAL_FIRSTMATE_ERROR naming what could not be proved - an unresolvable
-# root, an unsafe or malformed registry, or an unavailable registered local
-# home - so a caller refuses rather than treating an unreadable home as one
-# with no tasks. Requires bin/fm-secondmate-registry-lib.sh to be sourced first.
+# duplicates however each directory is spelled; every entry is resolved to its
+# physical spelling first, so one directory reached through a symlinked home
+# appears once. Returns 1 with FM_LOCAL_FIRSTMATE_ERROR naming what could not
+# be proved - an unresolvable <first-state> or root, an unsafe or malformed
+# registry, or an unavailable registered local home - so a caller refuses
+# rather than treating an unreadable home as one with no tasks. Requires
+# bin/fm-secondmate-registry-lib.sh to be sourced first.
 # shellcheck disable=SC2034 # FM_LOCAL_FIRSTMATE_ERROR is read by callers.
 fm_local_firstmate_state_dirs() {  # <first-state>
   local first=$1 root home reg line child known existing i=0

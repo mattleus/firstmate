@@ -171,9 +171,10 @@ fm_project_capacity_lookup() {  # <config-dir> <project-name>
 # Sets FM_PROJECT_CAPACITY_OCCUPANTS to the count and
 # FM_PROJECT_CAPACITY_OCCUPANT_IDS to a comma-separated list of the holders,
 # each outside <first-state> qualified with its home. Returns 1 with
-# FM_PROJECT_CAPACITY_ERROR when the local homes cannot be enumerated, or when
-# a state directory or task record in them cannot be read, since skipping it
-# could undercount the holders.
+# FM_PROJECT_CAPACITY_ERROR when <first-state> itself cannot be resolved, when
+# the local homes cannot be enumerated, or when a state directory or task
+# record in them cannot be read, since skipping it could undercount the
+# holders.
 fm_project_capacity_occupants() {  # <project-lock> <project-dir> <first-state> <own-id>
   local want=$1 own=$2 first=$3 self=$4 state meta kind project lock id label i
   local -a cache_dirs cache_locks

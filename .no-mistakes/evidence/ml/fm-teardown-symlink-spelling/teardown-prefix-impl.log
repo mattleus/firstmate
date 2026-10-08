@@ -1,0 +1,29 @@
+ok - fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call
+ok - fm-teardown: a concurrent lifecycle action refuses before mutation
+ok - fm-teardown: non-pool cleanup ignores unrelated task publication locks
+ok - fm-teardown: destructive cleanup serializes with metadata writers
+ok - cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate while every empty backend target refuses
+ok - cleanup identity: an Orca record's real composite worktree id validates while a separatorless or newline-carrying id refuses
+ok - tmux backend: direct empty target returns nonzero without invoking tmux
+ok - process cleanup: creation-time PID identity removes only the exact child and preserves the control child
+skip - tmux not installed
+skip - tmux not installed
+skip - tmux not installed
+skip - tmux not installed
+skip - tmux not installed
+ok - fm-teardown: an Orca close its missing CLI never attempted refuses even under --force, keeping the record naming the terminal
+skip - tmux not installed
+ok - Treehouse locking resolves a bare local origin against its source project, matching the provisioned clone
+ok - fm-teardown: a pool slot named by a second task record is never returned, killed, or reset
+ok - fm-teardown: a pool slot held by another firstmate home is never returned
+ok - fm-teardown: a task that solely holds its slot still returns it
+not ok - a symlinked Firstmate home falsely collided with its own slot: ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T/fm-prefix-check.eES8kl/.pi/extensions/fm-primary-turnend-guard.ts -e /var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T/fm-prefix-check.eES8kl/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: task symlinked-home's recorded worktree /private/var/folders/g1/q67qx6cx44n6v9v0fdr3l_xw0000gn/T/fm-teardown-endpoint-safety.6rbiYl/symlinked-home/pool/1/project is also task symlinked-home's recorded worktree.
+Returning that pool slot would kill symlinked-home's processes and reset its copy, so nothing was changed - not even with --force.
+Reconcile whichever record is wrong (bin/fm-crew-state.sh symlinked-home; bin/fm-crew-state.sh symlinked-home), then re-run teardown.

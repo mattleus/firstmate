@@ -2353,7 +2353,10 @@ require_exclusive_worktree_slot_record() {
   local slot state_dir other other_id field other_path other_slot record_meta_real other_real
   slot=$(canonical_existing_dir "$worktree") || return 0
   record_meta_real=$(cd "$(dirname "$record_meta")" 2>/dev/null &&
-    printf '%s/%s\n' "$(pwd -P)" "$(basename "$record_meta")") || return 1
+    printf '%s/%s\n' "$(pwd -P)" "$(basename "$record_meta")") || {
+    echo "REFUSED: cannot resolve the directory holding record $record_meta; nothing was changed" >&2
+    return 1
+  }
   # A slot whose owner claim names another task was reassigned, so this record's
   # teardown is records-only and touches nothing under it; another record naming
   # the slot is then no hazard, and refusing would strand this stale record and
@@ -2370,7 +2373,10 @@ require_exclusive_worktree_slot_record() {
       # match too.
       if [ "${other##*/}" = "${record_meta##*/}" ]; then
         other_real=$(cd "$(dirname "$other")" 2>/dev/null &&
-          printf '%s/%s\n' "$(pwd -P)" "$(basename "$other")") || return 1
+          printf '%s/%s\n' "$(pwd -P)" "$(basename "$other")") || {
+          echo "REFUSED: cannot resolve the directory holding record $other; nothing was changed" >&2
+          return 1
+        }
         [ "$other_real" = "$record_meta_real" ] && continue
       fi
       other_id=$(basename "$other" .meta)

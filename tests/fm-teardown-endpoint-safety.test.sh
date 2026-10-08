@@ -614,7 +614,7 @@ test_sole_slot_record_still_tears_down() {
 }
 
 test_symlinked_firstmate_home_does_not_self_collide() {
-  local dir id=symlinked-home
+  local dir id=symlinked-home stub
 
   dir=$(make_case symlinked-home)
   mark_case_as_treehouse_pool "$dir"
@@ -623,7 +623,42 @@ test_symlinked_firstmate_home_does_not_self_collide() {
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   ln -s "$dir/home" "$dir/home-via-code-root"
 
+  # The reported false positive came from Git Bash/MSYS, where `[ a -ef b ]`
+  # answers by spelling: two spellings of one file look like two files, so the
+  # pre-fix dedup takes the root-home spelling of this state dir for another
+  # home and the record scan then reads this task's own meta as a stranger's.
+  # A POSIX -ef hides that, so every new non-interactive bash in this case
+  # (BASH_ENV) shadows the [ and test builtins with exactly that
+  # spelling-sensitive -ef; bash's [ accepts ] only as a literal token, so the
+  # shadow delegates through builtin test with the closing ] stripped. The
+  # fixed teardown must still see one home and one record.
+  stub=$dir/spelling-sensitive-ef-env
+  cat > "$stub" <<'SH'
+if [ "${FM_TEST_SPELLING_SENSITIVE_EF:-}" = 1 ]; then
+  [() {
+    if builtin [ $# -eq 4 ] && builtin [ "$2" = -ef ] && builtin [ "$4" = ']' ]; then
+      builtin [ -e "$1" ] && builtin [ "$1" = "$3" ]
+      return
+    fi
+    if builtin [ $# -ge 1 ]; then
+      set -- "${@:1:$#-1}"
+      builtin test "$@"
+      return
+    fi
+    return 2
+  }
+  test() {
+    if builtin [ $# -eq 3 ] && builtin [ "$2" = -ef ]; then
+      builtin [ -e "$1" ] && builtin [ "$1" = "$3" ]
+      return
+    fi
+    builtin test "$@"
+  }
+fi
+SH
+
   FM_TEST_HOME="$dir/home-via-code-root" \
+    FM_TEST_SPELLING_SENSITIVE_EF=1 BASH_ENV="$stub" \
     run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
     || fail "a symlinked Firstmate home falsely collided with its own slot: $(cat "$dir/stderr")"
   assert_absent "$dir/home/state/$id.meta" \

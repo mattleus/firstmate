@@ -180,6 +180,10 @@ fm_project_capacity_occupants() {  # <project-lock> <project-dir> <first-state> 
   FM_PROJECT_CAPACITY_OCCUPANTS=0
   FM_PROJECT_CAPACITY_OCCUPANT_IDS=
   FM_PROJECT_CAPACITY_ERROR=
+  first=$(CDPATH='' cd -- "$first" 2>/dev/null && pwd -P) || {
+    FM_PROJECT_CAPACITY_ERROR="cannot resolve the firstmate state directory"
+    return 1
+  }
   fm_local_firstmate_state_dirs "$first" || {
     FM_PROJECT_CAPACITY_ERROR=$FM_LOCAL_FIRSTMATE_ERROR
     return 1

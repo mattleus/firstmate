@@ -55,7 +55,7 @@ claim_pool_slot() {  # <case> <task-id> [home]
 
 run_case() {  # <case> <id>
   local dir=$1 id=$2
-  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="${FM_TEST_HOME:-$dir/home}" FM_ROOT_OVERRIDE="$ROOT" \
   FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
     "$TEARDOWN" "$id" --force
 }
@@ -611,6 +611,27 @@ test_sole_slot_record_still_tears_down() {
   kill "$worker" 2>/dev/null || true
   wait "$worker" 2>/dev/null || true
   pass "fm-teardown: a task that solely holds its slot still returns it"
+}
+
+test_symlinked_firstmate_home_does_not_self_collide() {
+  local dir id=symlinked-home
+
+  dir=$(make_case symlinked-home)
+  mark_case_as_treehouse_pool "$dir"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  ln -s "$dir/home" "$dir/home-via-code-root"
+
+  FM_TEST_HOME="$dir/home-via-code-root" \
+    run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "a symlinked Firstmate home falsely collided with its own slot: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" \
+    "symlinked-home teardown left the task record"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "symlinked-home teardown did not return its own pool slot: $(cat "$dir/runtime.log")"
+
+  pass "fm-teardown: a Firstmate home reached through a symlink does not self-collide"
 }
 
 test_recorded_endpoint_that_changed_directory_still_tears_down() {
@@ -1439,6 +1460,7 @@ test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
+test_symlinked_firstmate_home_does_not_self_collide
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_stale_record_on_claimed_slot_retires_then_claimant_tears_down
 test_own_and_absent_slot_claims_still_tear_down

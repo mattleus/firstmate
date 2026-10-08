@@ -1480,6 +1480,10 @@ fm_firstmate_root_home() {
 fm_local_firstmate_state_dirs() {  # <first-state>
   local first=$1 root home reg line child known existing i=0
   local -a homes
+  first=$(CDPATH='' cd -- "$first" 2>/dev/null && pwd -P) || {
+    FM_LOCAL_FIRSTMATE_ERROR="cannot resolve the firstmate state directory"
+    return 1
+  }
   FM_LOCAL_FIRSTMATE_STATES=("$first")
   FM_LOCAL_FIRSTMATE_ERROR=
   root=$(fm_firstmate_root_home "$FM_HOME") || {
@@ -1492,7 +1496,7 @@ fm_local_firstmate_state_dirs() {  # <first-state>
     i=$((i + 1))
     known=0
     for existing in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
-      if [ "$existing" = "$home/state" ] || [ "$existing" -ef "$home/state" ]; then
+      if [ "$existing" = "$home/state" ]; then
         known=1
       fi
     done

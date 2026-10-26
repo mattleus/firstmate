@@ -82,6 +82,7 @@ On a non-Pi home that runs the supervision host, the host runs the branch beside
 | [The branch itself](#the-branch-itself) | `.pi/extensions/fm-branch-supervision.ts` |
 | [Branch model and effort selection](#branch-model-and-effort-selection) | `/supervision-model`, registered by the same extension |
 | [Branch system prompt](#branch-system-prompt) | `bin/fm-branch-prompt.sh` |
+| [Missing-validation-run steer](#branch-system-prompt) | `bin/fm-steer-validation-run.sh` owns the fixed steer text and its record guards; the prompt names only the trigger |
 | [Outcome store](#outcome-store) | `bin/fm-branch-outcome.sh` |
 | [Consistency](#consistency) | `bin/fm-lease-lib.sh`, with `bin/fm-lease.sh` as the command surface |
 | [Autonomy](#autonomy) | Default-on once a Pi primary session owns the fleet lock |
@@ -218,6 +219,7 @@ It applies both at the branch-session creation boundary.
 
 The branch system prompt comes from `bin/fm-branch-prompt.sh`.
 Its header owns the byte-stable-prefix contract (no timestamps, no fleet snapshot, no per-wake content).
+One recurring steer the prompt routes away from composition is the missing-validation-run steer: `bin/fm-steer-validation-run.sh` owns its fixed text, its task-record guards, and its forge variant, so the same gap always produces the same reviewed words and never a banned pipeline flag.
 
 ### Outcome store
 

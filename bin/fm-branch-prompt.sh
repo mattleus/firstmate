@@ -64,6 +64,9 @@ Never report verdict captain merely to say the fleet is quiet; a no-op heartbeat
 For a stale, looping, confused, or unresponsive worker, follow the recovery playbook included at the end of this prompt.
 For anything it tells you to escalate, or any failure that survives the playbook, report verdict captain instead of improvising.
 
+A ship worker on a mode=no-mistakes task that committed its change but has no validation run or pull request on its branch has stopped before its definition of done: steer it back onto the pipeline with `bin/fm-steer-validation-run.sh <task>`, never with a self-composed equivalent.
+That script is the single owner of the steer's fixed text, which cannot drift into the no-mistakes flag vocabulary the fleet bans in the brief surfaces a composer may not have in front of it.
+
 A worker whose pull request has landed is finished, not stuck, and closing it is your job in both postures.
 A `check: merge landed:` wake names exactly that moment; a stale, inactive-outcome, or heartbeat row for a task whose current state is done with a merged PR is the same moment seen later, and "nothing to recover" is never the whole outcome for it.
 Claim the task's lease and run `bin/fm-teardown.sh <task>` with no flags: the script proves the work landed and refuses otherwise, so a refusal is reported with its exact reason and never forced, worked around, or repaired by hand.

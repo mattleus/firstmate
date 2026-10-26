@@ -4,8 +4,9 @@
 # (bin/fm-branch-prompt.sh), the append-only outcome store
 # (bin/fm-branch-outcome.sh), the per-task lease contract (bin/fm-lease.sh,
 # bin/fm-lease-lib.sh), the lease and role-partition guards wired into the
-# mutating entrypoints, and the proof that a home which never runs the branch
-# is untouched by all of it.
+# mutating entrypoints, the fixed missing-validation-run steer
+# (bin/fm-steer-validation-run.sh) the prompt names for that trigger, and the
+# proof that a home which never runs the branch is untouched by all of it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -68,6 +69,14 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
   case "$out_a" in
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;
     *) fail "branch prompt lost the second-mate relay, signal-span, or stale-liveness rule" ;;
+  esac
+  # The 2026-10-26 stop-at-commit steers: the identical missing-validation gap
+  # composed once WITH and once WITHOUT the fleet-banned no-mistakes flag, so
+  # the prompt now routes that steer to its fixed-text owner instead of the
+  # composer's memory.
+  case "$out_a" in
+    *"no validation run or pull request on its branch has stopped before its definition of done"*"\`bin/fm-steer-validation-run.sh <task>\`"*"never with a self-composed equivalent"*"the single owner of the steer's fixed text"*) ;;
+    *) fail "branch prompt lost the missing-validation-run fixed-steer rule" ;;
   esac
   pass "branch prompt is byte-stable across homes, cwd, timezone, and time, above the cache floor"
 }
@@ -1540,6 +1549,171 @@ WRAPPER
   pass "the away spend cap is rechecked under the task-set lock so concurrent spawns cannot both publish"
 }
 
+# --- the missing-validation-run fixed steer -------------------------------------
+#
+# bin/fm-steer-validation-run.sh owns the fixed steer the branch prompt names
+# for a ship worker that committed its change but never started its no-mistakes
+# run. That steer used to be composed per occurrence by whichever supervisor
+# noticed the gap, and two 2026-10-26 compositions of the identical gap
+# disagreed on the fleet-banned auto-resolve flag - so these tests pin the
+# fixed text and its one parameterized fact (the ship branch), the forge
+# variant, the absence of any auto-resolve token, and the record guards that
+# refuse every wrong-case task record without sending anything.
+
+# The fm-send inbox-plane stub pattern, shared with tests/fm-send-inbox.test.sh:
+# tmux records only what -l typing would send, and the composer reads clean.
+make_steer_stubs() { # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat >"$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    if [ "$literal" = 1 ]; then
+      printf '%s\n' "${1:-}" >> "$FM_SEND_LOG"
+    fi
+    exit 0 ;;
+  display-message)
+    for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
+    printf 'fakepane\n'; exit 0 ;;
+  capture-pane) printf '-----\n|    |\n-----\n'; exit 0 ;;
+  list-windows) printf 'fm-t1\n'; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tmux"
+  cat >"$fb/sleep" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fb/sleep"
+  printf '%s\n' "$fb"
+}
+
+setup_steer_case() { # <name> <registry-line|""> <meta-kv>... -> case dir with t1 meta
+  local name=$1 registry=$2 dir
+  shift 2 || return 1
+  dir="$TMP_ROOT/$name"
+  mkdir -p "$dir/home/state" "$dir/home/data"
+  make_steer_stubs "$dir" >/dev/null
+  [ -z "$registry" ] || printf '%s\n' "$registry" > "$dir/home/data/projects.md"
+  fm_write_meta "$dir/home/state/t1.meta" "window=sess:fm-t1" "harness=claude" "$@"
+  printf '%s\n' "$dir"
+}
+
+run_steer() { # <case-dir> [steer-args...]
+  local dir=$1
+  shift
+  : >"$dir/send.log"
+  env PATH="$dir/fakebin:$PATH" \
+    FM_ROOT_OVERRIDE="$dir/home" FM_HOME="$dir/home" \
+    FM_STATE_OVERRIDE="$dir/home/state" FM_CONFIG_OVERRIDE="$dir/home/config" \
+    FM_SEND_LOG="$dir/send.log" FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-steer-validation-run.sh" "$@"
+}
+
+steer_record_body() { # <record-path>
+  bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$1"
+}
+
+assert_no_auto_resolve_flag() { # <body> <label>
+  assert_not_contains "$1" "--yes" "$2: the fixed steer must never carry --yes"
+  if printf '%s' "$1" | grep -Eq '(^|[^[:alnum:]])--?y([^[:alnum:]]|$)'; then
+    fail "$2: the fixed steer must never carry a bare -y token"$'\n'"$1"
+  fi
+}
+
+test_fixed_validation_steer_pr_variant() {
+  local dir body out status
+  dir=$(setup_steer_case steer-pr '- proj-a [no-mistakes] - fixture (added 2026-01-01)' \
+    "kind=ship" "mode=no-mistakes" "branch=ml/dom-x" "project=$TMP_ROOT/steer-pr/proj/proj-a")
+  out=$(run_steer "$dir" t1)
+  status=$?
+  expect_code 0 "$status" "the PR-variant steer send"
+  body=$(steer_record_body "$dir/home/state/t1.inbox/001.msg")
+  assert_contains "$body" 'no-mistakes axi run --intent "<this brief' "the steer carries the correct run invocation"
+  assert_contains "$body" "\`ml/dom-x\`" "the steer names the recorded ship branch"
+  assert_contains "$body" "has no no-mistakes validation run and no pull request yet" "the PR variant states the gap"
+  assert_contains "$body" "ask-user finding" "the steer points at the brief's ask-user rule"
+  assert_contains "$body" "firstmate" "the steer names the escalation target"
+  assert_not_contains "$body" "auto-resolve" "the steer does not restate the ban's mechanics"
+  assert_contains "$body" "Report the PR's full URL when the pipeline opens it" "the PR variant names its completion evidence"
+  assert_no_auto_resolve_flag "$body" "PR variant"
+  assert_contains "$out" "sent t1: fixed start-validation steer for ml/dom-x (forge none)" "the send summary names task, branch, and forge"
+  out=$(run_steer "$dir" fm-t1)
+  status=$?
+  expect_code 0 "$status" "the legacy fm- label resolves like a bare task id"
+  assert_present "$dir/home/state/t1.inbox/002.msg" "a re-send enqueues a new record sequence"
+  pass "the fixed validation steer renders the PR variant with no auto-resolve flag"
+}
+
+test_fixed_validation_steer_gerrit_variant() {
+  local dir body out status
+  dir=$(setup_steer_case steer-gerrit '- proj-g [no-mistakes forge=gerrit] - fixture (added 2026-01-01)' \
+    "kind=ship" "mode=no-mistakes" "branch=gr/x" "project=$TMP_ROOT/steer-gerrit/proj/proj-g")
+  out=$(run_steer "$dir" t1)
+  status=$?
+  expect_code 0 "$status" "the gerrit-variant steer send"
+  body=$(steer_record_body "$dir/home/state/t1.inbox/001.msg")
+  assert_contains "$body" "has no no-mistakes validation run yet" "the gerrit variant states the gap without a pull request"
+  assert_not_contains "$body" "pull request" "a gerrit project has no pull request to report"
+  assert_contains "$body" "published change's full URL" "the gerrit variant names its completion evidence"
+  assert_contains "$body" 'no-mistakes axi run --intent "<this brief' "the gerrit variant carries the correct run invocation"
+  assert_no_auto_resolve_flag "$body" "gerrit variant"
+  assert_contains "$out" "(forge gerrit)" "the send summary records the gerrit variant"
+  pass "the fixed validation steer renders the gerrit variant with no pull-request wording"
+}
+
+expect_steer_refusal() { # <case-dir> <task-arg> <reason-substring> <label>
+  local dir=$1 arg=$2 reason=$3 label=$4 out status
+  status=0
+  out=$(run_steer "$dir" "$arg" 2>&1) || status=$?
+  expect_code 6 "$status" "$label"
+  assert_contains "$out" "$reason" "$label: the refusal names its reason"
+  assert_absent "$dir/home/state/${arg#fm-}.inbox" "$label: a refusal sends nothing"
+}
+
+test_fixed_validation_steer_record_guards() {
+  local dir out status
+  dir=$(setup_steer_case steer-guards '')
+  status=0
+  out=$(run_steer "$dir" 2>&1) || status=$?
+  expect_code 2 "$status" "missing task id"
+  expect_steer_refusal "$dir" t9 "no recorded task metadata" "an unknown task id"
+
+  dir=$(setup_steer_case steer-kind '' "kind=scout" "mode=no-mistakes" "branch=sc/x" "project=/p/proj-k")
+  expect_steer_refusal "$dir" t1 "kind=scout" "a scout task"
+
+  dir=$(setup_steer_case steer-mode '' "kind=ship" "mode=direct-PR" "branch=ml/m" "project=/p/proj-m")
+  expect_steer_refusal "$dir" t1 "mode=direct-PR" "a direct-PR task"
+
+  dir=$(setup_steer_case steer-mode-absent '' "kind=ship" "branch=ml/m" "project=/p/proj-m")
+  expect_steer_refusal "$dir" t1 "mode=<unset>" "a task with no recorded mode fails safe"
+
+  dir=$(setup_steer_case steer-nobranch '' "kind=ship" "mode=no-mistakes" "project=/p/proj-n")
+  expect_steer_refusal "$dir" t1 "records no ship branch" "a task with no recorded ship branch"
+
+  dir=$(setup_steer_case steer-noproject '' "kind=ship" "mode=no-mistakes" "branch=ml/n")
+  expect_steer_refusal "$dir" t1 "records no project" "a task with no recorded project"
+
+  dir=$(setup_steer_case steer-badforge '- proj-b [no-mistakes forge=] - fixture (added 2026-01-01)' \
+    "kind=ship" "mode=no-mistakes" "branch=ml/b" "project=/p/proj-b")
+  expect_steer_refusal "$dir" t1 "could not be resolved" "a malformed forge binding"
+  out=$(run_steer "$dir" t1 2>&1) || true
+  assert_contains "$out" "empty forge binding" "the forge refusal keeps fm-project-mode's reason"
+  pass "the fixed steer refuses non-ship kinds, other modes, and incomplete or ambiguous records without sending"
+}
+
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_outcome_store_is_append_only_with_cursor_reads
 test_outcome_append_keeps_a_bounded_display_tail
@@ -1574,3 +1748,6 @@ test_away_record_relocates_main_owned_actions_to_the_branch
 test_away_branch_spawn_requires_queued_dispatchable_work
 test_away_spend_cap_is_rechecked_under_the_task_set_lock
 test_quiet_record_never_caps_a_present_captains_spawn
+test_fixed_validation_steer_pr_variant
+test_fixed_validation_steer_gerrit_variant
+test_fixed_validation_steer_record_guards

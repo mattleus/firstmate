@@ -1482,6 +1482,13 @@ families_for_changed_path() {
       printf '%s\n' afk
       printf '%s\n' real-herdr-gated
       ;;
+    bin/fm-branch-prompt.sh|bin/fm-steer-validation-run.sh)
+      # The branch prompt generator and the fixed steer it names: the
+      # byte-stability and steer suite, plus the extension suite that drives a
+      # broken prompt generator to prove the failure direction.
+      printf '%s\n' "__script__:fm-branch-supervision.test.sh"
+      printf '%s\n' "__script__:fm-pi-branch-extension.test.sh"
+      ;;
     bin/fm-supervision-host.sh|bin/fm-supervision-engine-lib.sh|\
     bin/fm-branch-report.sh|bin/fm-branch-dispatch.mjs)
       # The supervision host and its parts: its own suite and live guard, plus

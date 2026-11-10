@@ -1853,6 +1853,61 @@ SH
   pass "a dirty return is reported even when a later teardown step refuses"
 }
 
+# A teardown refusal while the supervision branch holds the task's lease used
+# to leave that lease live until the hosting session activated a new branch
+# conversation: the refusal itself was correct, but everything the lease
+# guards (steering, cleanup) stayed refused for the other actor the whole
+# time.
+# The refusal handling must drop the claimed lease with the refusal while
+# leaving every refusal gate exactly as strong.
+test_branch_lease_released_on_teardown_refusal() {
+  local case_dir rc
+  local -x FM_SUPERVISION_ACTOR=branch
+  case_dir=$(make_case branch-lease-refusal)
+  write_meta "$case_dir" local-only scout
+  # The report exists, so the refusal comes from the captain-call completion
+  # gate - the shape the branch hit for a scout whose archived captain-held
+  # call could not be re-verified (decisions_reviewed is deliberately absent).
+  mkdir -p "$case_dir/data/task-x1"
+  printf '%s\n' 'Scout report.' > "$case_dir/data/task-x1/report.md"
+  # This shell stands in for the session-lock holder so claimed leases read live.
+  printf '%s\n' "$$" > "$case_dir/state/.lock"
+
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" FM_LEASE_HOLDER_PID=$$ \
+    "$ROOT/bin/fm-lease.sh" claim task-x1 --actor branch \
+    || fail "branch-lease-refusal: fixture claim failed"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" FM_LEASE_HOLDER_PID=$$ \
+    "$ROOT/bin/fm-lease.sh" claim task-other --actor branch \
+    || fail "branch-lease-refusal: other-task fixture claim failed"
+  case "$(FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" "$ROOT/bin/fm-lease.sh" check task-x1)" in
+    "branch $$ "*" live") ;;
+    *) fail "branch-lease-refusal: fixture lease did not read live" ;;
+  esac
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 1 "$rc" "branch-lease-refusal: the completion gate must still refuse"
+  assert_grep "REFUSED: scout task task-x1 has not passed the captain-call completion gate" \
+    "$case_dir/stderr" "branch-lease-refusal: the refusal lost its reason"
+  assert_absent "$case_dir/state/.lease-task-x1" \
+    "branch-lease-refusal: the branch's lease for the refused task outlived the refusal"
+  assert_present "$case_dir/state/.lease-task-other" \
+    "branch-lease-refusal: the refusal released another task's lease"
+
+  # A main-actor refusal keeps its lease: an attended main may retry under it.
+  FM_SUPERVISION_ACTOR=main
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" FM_LEASE_HOLDER_PID=$$ \
+    "$ROOT/bin/fm-lease.sh" claim task-x1 --actor main \
+    || fail "branch-lease-refusal: main fixture claim failed"
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout2" 2> "$case_dir/stderr2" || rc=$?
+  expect_code 1 "$rc" "branch-lease-refusal: the main-actor refusal"
+  assert_present "$case_dir/state/.lease-task-x1" \
+    "branch-lease-refusal: a main-actor refusal must keep main's lease"
+  pass "a branch-actor teardown refusal releases the branch's lease for that task only"
+}
+
 test_forced_secondmate_child_scout_nested_clone_returns_clean() {
   local case_dir home child_wt rc
   case_dir=$(make_case secondmate-child-nested-clean)
@@ -6254,6 +6309,7 @@ test_scout_nested_clone_returns_with_no_untracked_entries
 test_ship_nested_clone_is_refused_and_bytes_stay
 test_dirty_return_warns_which_slot_was_lost
 test_dirty_return_warns_even_when_a_later_step_refuses
+test_branch_lease_released_on_teardown_refusal
 test_forced_secondmate_child_scout_nested_clone_returns_clean
 test_forced_secondmate_dirty_child_return_warns_and_completes
 test_return_that_removes_copy_warns_cannot_verify

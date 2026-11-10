@@ -42,7 +42,10 @@
 #     it activates a new one (the Pi branch extension's
 #     generation-activation cleanup; the supervision host also releases them
 #     after every engine turn), which also recovers a lease held by the live
-#     session but an abandoned branch conversation.
+#     session but an abandoned branch conversation. A branch-actor teardown
+#     refusal releases that task's branch lease at refusal time instead of
+#     leaving it for this generation cleanup (bin/fm-teardown.sh owns that
+#     refusal-release path).
 #
 # THREAT MODEL (deliberate, captain-decided): these guards are
 # CONFUSED-AGENT-GRADE, the same grade bin/fm-gate-refuse-lib.sh documents
@@ -256,6 +259,24 @@ fm_lease_clear_stale() {
   [ -e "$file" ] || return 0
   fm_lease_live "$1" && return 0
   rm -f -- "$file"
+}
+
+# fm_lease_release <task> <actor>: drop <actor>'s lease for <task>. A silent
+# no-op when no lease exists, the record is torn beyond a readable actor, or
+# the other actor holds it, so a retry after a partial failure stays safe.
+# Caller authorization - a caller releases only as its own actor - lives at the
+# command surface in bin/fm-lease.sh; this owns only the removal mechanics and
+# is the one funnel every release path uses. The caller holds the
+# lease-command lock - fm-lease.sh takes it for the whole command, and a
+# guarded mutating script retains it through fm_lease_guard - so the ownership
+# check and the remove stay serialized against claims.
+fm_lease_release() {
+  local task=$1 actor=$2
+  fm_lease_valid_id "$task" || return 0
+  case "$actor" in main|branch) ;; *) return 0 ;; esac
+  if fm_lease_read "$task" && { [ "$FM_LEASE_ACTOR" = "$actor" ] || [ -z "$FM_LEASE_ACTOR" ]; }; then
+    rm -f -- "$(fm_lease_path "$task")"
+  fi
 }
 
 # fm_lease_guard <task> <action-label>: refuse (exit FM_LEASE_REFUSE_EXIT) when

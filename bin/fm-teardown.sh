@@ -205,6 +205,15 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
+# Supervision lease on refusal (contract: bin/fm-lease-lib.sh): when a run by
+# the supervision branch actor is refused, the refusal handling releases the
+# branch's claimed lease for that task with it. The branch claims the lease
+# around the wake it is handling and never mutates the task again after a
+# refusal, so the lease has nothing left to guard and must not stay live until
+# the host activates a new branch conversation. A main-actor refusal keeps
+# main's lease, because an attended main may deliberately retry under it. The
+# refusal itself - what is verified, when this script refuses, and the exit
+# code it reports - is unchanged; only the lease stops leaking.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
 #   --force skips ordinary-task dirty and landed-work checks, skips scout report
 #   checks and closes the scout as discarded with no report recorded, and
@@ -638,6 +647,16 @@ teardown_release_locks() {
   if [ "$TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
     fm_lock_release "$TREEHOUSE_PROJECT_LOCK" || true
     TREEHOUSE_PROJECT_LOCK_HELD=0
+  fi
+  # A refused or slot-losing run ends the branch actor's handling of this
+  # task for the wake it rode in on, so the branch's own claimed lease for it
+  # has nothing left to guard: release it here rather than leaving it live
+  # until the next branch conversation activates (this script's header owns
+  # the contract). The guard's retained command lock still serializes this
+  # remove against claims.
+  if [ "$status" -ne 0 ] && [ -n "$FM_LEASE_GUARD_LOCK" ] \
+    && [ "$(fm_lease_actor 2>/dev/null)" = branch ]; then
+    fm_lease_release "$ID" branch || true
   fi
   fm_lease_guard_release || true
   return "$status"

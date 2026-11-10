@@ -174,9 +174,7 @@ case "$CMD" in
       echo "error: release refused - the $CALLER supervision actor cannot release a lease as $ACTOR on '$TASK'" >&2
       exit "$FM_LEASE_REFUSE_EXIT"
     fi
-    if fm_lease_read "$TASK" && { [ "$FM_LEASE_ACTOR" = "$ACTOR" ] || [ -z "$FM_LEASE_ACTOR" ]; }; then
-      rm -f -- "$(fm_lease_path "$TASK")"
-    fi
+    fm_lease_release "$TASK" "$ACTOR"
     ;;
   check)
     fm_lease_read "$TASK" || exit 1

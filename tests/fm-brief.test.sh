@@ -393,7 +393,7 @@ test_ship_mode_is_explicit_not_registry() {
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
-  assert_grep "Firstmate will then instruct you to run /no-mistakes" "$brief" \
+  assert_grep "without waiting for firstmate to instruct you" "$brief" \
     "explicit no-mistakes brief did not render the pipeline definition of done"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
@@ -563,6 +563,86 @@ test_no_mistakes_dod_green_detection() {
   assert_no_grep "poll \`no-mistakes axi status\` from a separate call" "$brief" \
     "no-mistakes DOD still makes a status poll the wait for the next gate or outcome"
   pass "fm-brief.sh: no-mistakes DOD detects a green PR from the drive call, not a status poll"
+}
+
+# Fleet evidence (2026-10): no-mistakes ships across harnesses reported done
+# right after committing, because the Definition of done opened with the
+# commit-is-done line, told the worker to report done and stop there, and
+# deferred the pipeline to a later firstmate instruction; each spawn needed
+# exactly one steer to begin the validation drive. Every no-mistakes variant
+# must now open with commit-is-not-done framing, teach the drive, give the
+# commit as the handoff step the worker continues from unprompted, and end
+# with the pipeline-gated done. local-only keeps its plain commit-done contract
+# (its done genuinely is the committed branch) and direct-PR keeps its
+# commit-then-open-PR sequence; the worktree-isolation assertion is untouched.
+test_no_mistakes_dod_commit_step_precedes_pipeline_drive() {
+  local home brief label args mid final a b c m f
+  home="$TMP_ROOT/dod-order-home"
+  mkdir -p "$home/data"
+  while IFS='|' read -r label args mid final; do
+    [ -n "$label" ] || continue
+    # shellcheck disable=SC2086  # args is an intentional word-split arg list
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-order-$label" some-proj $args >/dev/null 2>&1 \
+      || fail "$label: scaffold exited non-zero"
+    brief="$home/data/brief-order-$label/brief.md"
+
+    assert_grep "Delivery contract: mode=no-mistakes" "$brief" \
+      "$label: brief lost its machine-readable delivery contract line"
+    assert_grep "is the step before done, not done itself" "$brief" \
+      "$label: definition of done lost the commit-is-not-done framing"
+    # shellcheck disable=SC2016  # backticks are literal generated brief text
+    assert_grep 'append `done [at=<epoch>]: {summary}` to the status file and keep going' "$brief" \
+      "$label: the commit handoff step must not end the worker's turn"
+    assert_grep "without waiting for firstmate to instruct you" "$brief" \
+      "$label: the worker must start the pipeline drive itself"
+    assert_no_grep "The task is complete only when committed on your branch." "$brief" \
+      "$label: the old commit-is-done phrasing survived"
+    assert_no_grep "Firstmate will then instruct you" "$brief" \
+      "$label: the old stop-and-wait-for-firstmate phrasing survived"
+    assert_grep "Verify isolation before anything else." "$brief" \
+      "$label: the worktree-isolation assertion changed"
+
+    a=$(grep -anF -- "is the step before done, not done itself" "$brief" | head -1 | cut -d: -f1)
+    b=$(grep -anF -- "You drive no-mistakes by responding to its gates" "$brief" | head -1 | cut -d: -f1)
+    c=$(grep -anF -- "to the status file and keep going" "$brief" | head -1 | cut -d: -f1)
+    f=$(grep -anF -- "$final" "$brief" | head -1 | cut -d: -f1)
+    [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] && [ -n "$f" ] \
+      || fail "$label: an ordering anchor is missing from the definition of done"
+    [ "$a" -lt "$b" ] || fail "$label: the commit-is-not-done framing must open ahead of the driving instructions"
+    [ "$b" -lt "$c" ] || fail "$label: the driving instructions must precede the commit-and-handoff step"
+    [ "$c" -lt "$f" ] || fail "$label: the commit step must precede the pipeline-gated done"
+    if [ -n "$mid" ]; then
+      m=$(grep -anF -- "$mid" "$brief" | head -1 | cut -d: -f1)
+      [ -n "$m" ] || fail "$label: missing continuation anchor: $mid"
+      [ "$c" -lt "$m" ] || fail "$label: the commit step must precede the pipeline's continuation"
+    fi
+  done <<'ROWS'
+nm-default|--mode no-mistakes||After /no-mistakes reports CI green (the CI-ready return point
+nm-gerrit|--mode no-mistakes --forge gerrit --shape squash|You may not publish until you have closed that gap:|published for review
+nm-manual|--mode no-mistakes --pr manual|write the PR title and body yourself and publish them|checks green
+ROWS
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-order-localonly some-proj --mode local-only >/dev/null 2>&1 \
+    || fail "local-only scaffold exited non-zero"
+  brief="$home/data/brief-order-localonly/brief.md"
+  # shellcheck disable=SC2016  # backticks are literal generated brief text
+  assert_grep "The task is complete only when committed on your branch \`fm/brief-order-localonly\`" "$brief" \
+    "local-only: its done genuinely is the committed branch"
+  assert_grep "no remote, no PR, no pipeline." "$brief" \
+    "local-only lost its no-pipeline declaration"
+  assert_no_grep "is the step before done, not done itself" "$brief" \
+    "local-only must not carry the pipeline framing; its done really is the committed branch"
+  assert_no_grep "You drive no-mistakes" "$brief" \
+    "local-only must not reference the pipeline drive"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-order-directpr some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "direct-PR scaffold exited non-zero"
+  brief="$home/data/brief-order-directpr/brief.md"
+  assert_grep "When it is implemented and committed, push your branch and open a PR" "$brief" \
+    "direct-PR: the commit-then-open-PR sequence moved"
+  assert_no_grep "is the step before done, not done itself" "$brief" \
+    "direct-PR has no pipeline drive to frame"
+  pass "fm-brief.sh: no-mistakes variants put the commit step before the pipeline drive that ends the definition of done"
 }
 
 test_ask_user_escalation_format() {
@@ -1702,6 +1782,7 @@ test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_no_mistakes_dod_green_detection
+test_no_mistakes_dod_commit_step_precedes_pipeline_drive
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
 test_ship_project_memory_wording

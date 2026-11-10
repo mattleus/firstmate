@@ -476,6 +476,28 @@ Two firstmate-specific rules layer on top of that guidance:
 EOF
 }
 
+# The no-mistakes commit step, shared by the three no-mistakes Definition of
+# done variants so the handoff wording cannot drift: the commit is the step
+# the pipeline drive starts from, never the done state, and the worker reports
+# the handoff and keeps going into the drive itself instead of stopping to
+# wait for an instruction. Fleet evidence (2026-10): every no-mistakes ship
+# stopped at the commit when this contract opened with a commit-is-done line
+# and a wait-for-firstmate sentence, each needing exactly one steer to start
+# the drive. The argument matches fm_nm_driving_block's: on gerrit the
+# pipeline pushes nothing, so the handoff names publish instead of push.
+fm_dod_nm_commit_step() {  # <gerrit|no-ci|forge>
+  local handoff="the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy"
+  if [ "$1" = gerrit ]; then
+    handoff="the handoff that starts the pipeline; it is not a request to publish"
+  fi
+  cat <<EOF
+
+When the work is implemented and committed on your branch, append \`done [at=<epoch>]: {summary}\` to the status file and keep going; that report does not end your turn.
+That first \`done:\` is $handoff.
+Then invoke /no-mistakes and drive it exactly as this section directs, without waiting for firstmate to instruct you.
+EOF
+}
+
 # How a worker on a forge=gerrit project publishes, shared by both publishing
 # modes so the one push, the Change-Id rule, and the ready report are written
 # once. gerrit-axi owns the squash mechanics; this names the one call and what
@@ -504,7 +526,8 @@ EOF
 # so the validated head reaches the forge and the ready report's named-head
 # check holds unchanged. The worker then opens or updates the PR and watches its
 # checks itself. Shaped like the gerrit block: skip flags, the shared driving
-# block, then what to do once the run passes. Callers are fm_dod_block only.
+# block, the shared commit step, then what to do once the run passes. Callers
+# are fm_dod_block only.
 fm_dod_manual_pr_block() {  # <branch> <forge-cli> <draft-check> <contract-suffix> <nm-base> <pr-base>
   local branch=$1 forge_cli=$2 draft_check=$3 suffix=$4 nm_base=$5 pr_base=$6
   cat <<EOF
@@ -513,13 +536,11 @@ Delivery contract: mode=no-mistakes$suffix pr=manual
 Ship branch: $branch
 This project's pull-request text is written by hand: the pipeline's \`pr\` step would rewrite the title and body you write on every validated push, so **no-mistakes runs here as a validation pass that pushes the branch**, and you then open the PR yourself.
 Pass \`--skip pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, \`lint\`, and \`push\` still run, and \`ci\` has no pipeline-opened PR to watch.
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and push.
-That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
+A commit on your branch is the step before done, not done itself: the task is complete only when the pass below has validated and pushed that commit and your hand-written PR shows green checks.
 ${nm_base}
 EOF
   fm_nm_driving_block no-ci
+  fm_dod_nm_commit_step no-ci
   cat <<EOF
 
 When the run's outcome is passed, passed-with-skips, or passed-with-override, write the PR title and body yourself and publish them with \`$forge_cli\`:
@@ -584,13 +605,11 @@ Ship branch: $branch
 This project's review server is Gerrit: it has no pull requests and no forge CI the pipeline can watch, so **no-mistakes runs here as a review pass that ends at a ready branch**, and you then publish that branch as one change.
 Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, and \`lint\` are the whole point of the run.
 Those three are the only steps that reach a forge, and skipping them is a supported outcome, not a degraded one.
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate.
-That first \`done:\` is the handoff that starts the pipeline; it is not a request to publish.
+A commit on your branch is the step before done, not done itself: the task is complete only when the pass below has validated that commit and you have published it as one change.
 
 EOF
       fm_nm_driving_block "$forge"
+      fm_dod_nm_commit_step "$forge"
       cat <<EOF
 
 Because \`push\` is skipped, the pipeline's fixes DO NOT arrive in your checkout: each fix round commits onto a branch inside no-mistakes' own local gate repository, and with no push nothing carries those commits back to you.
@@ -678,13 +697,11 @@ EOF
 # Definition of done
 Delivery contract: mode=no-mistakes$contract_forge$contract_consent
 Ship branch: $branch
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
-That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
+A commit on your branch is the step before done, not done itself: the task is complete only when the /no-mistakes pipeline below has validated that commit and its PR reports green checks.
 ${nm_base}
 EOF
       fm_nm_driving_block "$forge"
+      fm_dod_nm_commit_step "$forge"
       cat <<EOF
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft $draft_check

@@ -30,6 +30,9 @@
 #      stands down when the payload already carries stop_hook_active.
 #   7. The watch extension arms through fm_watch_arm_omp and delivers an
 #      actionable close as one follow-up.
+#   8. Watcher continuity belongs to the close handler: an actionable close
+#      arms its successor at once, and any other close of a live generation
+#      takes its bounded retry at once, never after the in-flight delivery.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -963,6 +966,287 @@ EOF
   pass ".omp watch extension: a host close split across stream chunks reaches main as one whole follow-up"
 }
 
+# The stall evidence behind close-handler re-arming: an actionable close that
+# lands while an earlier wake's follow-up delivery is still held (on omp, by
+# the acceptance of that follow-up itself) used to be only queued, leaving no
+# watcher for the whole delivery. The close must arm the successor at once,
+# and the queued wake still reaches main in order once the held delivery
+# settles.
+test_watch_extension_actionable_close_mid_delivery_rearms_at_once() {
+  local repo home log stop release out status
+  repo="$TMP_ROOT/watch-rearm/repo"; home="$TMP_ROOT/watch-rearm/home"; log="$TMP_ROOT/watch-rearm/arm.log"
+  stop="$TMP_ROOT/watch-rearm.stop"; release="$TMP_ROOT/watch-rearm.release"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  printf 'confirmed generation=%s watcher=%s\n' "$2" "$4" >> "${FM_ARM_LOG:?}"
+  exit 0
+fi
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: first wake, held behind a guarded delivery\n'
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+if [ "$count" -eq 2 ]; then
+  while [ ! -e "${FM_RELEASE_FILE:?}" ]; do sleep 0.02; done
+  printf 'signal: second wake while the first delivery is held\n'
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_RELEASE_FILE="$release" \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map(); let tool = null; const sent = [];
+let settleFirst = () => {};
+const firstDelivery = new Promise((resolve) => { settleFirst = resolve; });
+let sends = 0;
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { tool = t; },
+  // The first wake's follow-up acceptance is held open, like a main that is
+  // slow to accept it; later sends are accepted at once.
+  sendUserMessage(m, o) {
+    sent.push({ m, o });
+    sends += 1;
+    return sends === 1 ? firstDelivery : undefined;
+  },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+const rows = () => existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+  : [];
+const arms = () => rows().filter((row) => row.startsWith("arm=")).length;
+const confirmed = () => rows().filter((row) => row.startsWith("confirmed generation=")).length;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor(pred, label) {
+  for (let i = 0; i < 500; i += 1) {
+    if (pred()) return;
+    await sleep(10);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+await tool.execute();
+await waitFor(() => sent.length === 1, "the first wake's follow-up acceptance");
+if (arms() !== 2) throw new Error(`expected the verified successor behind the first wake, got ${arms()} arms: ${rows().join(" | ")}`);
+if (!sent[0].m.includes("signal: first wake, held behind a guarded delivery")) {
+  throw new Error(`the first wake lost its reason: ${sent[0].m}`);
+}
+// The successor closes actionably while the first wake's delivery is still
+// held; continuity must not wait for that delivery to settle.
+writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
+await waitFor(() => arms() === 3, "a live successor while the first delivery is still held");
+if (sent.length !== 1) throw new Error(`the queued second wake jumped the held first delivery: ${JSON.stringify(sent)}`);
+settleFirst();
+await waitFor(() => sent.length === 2, "the queued second wake delivered once the held delivery settled");
+if (!sent[1].m.includes("signal: second wake while the first delivery is held")) {
+  throw new Error(`the second wake lost its reason: ${sent[1].m}`);
+}
+await sleep(150);
+if (arms() !== 3) throw new Error(`settling the held delivery started extra arm work: ${rows().join(" | ")}`);
+if (confirmed() !== 2) throw new Error(`expected one handling confirmation per delivered wake, got ${confirmed()}: ${rows().join(" | ")}`);
+for (const item of sent) {
+  if (item.m.includes("watcher: FAILED")) throw new Error(`a close-owned re-arm surfaced a failure follow-up: ${item.m}`);
+}
+await handlers.get("session_shutdown")({}, {});
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp must re-arm at once when a successor closes actionably mid-delivery: $out"
+  [ -z "$out" ] || fail "omp mid-delivery re-arm test printed output: $out"
+  pass ".omp watch extension: an actionable close mid-delivery re-arms at once and still delivers the queued wake in order"
+}
+
+# A verified successor can die while the wake it was started for is still
+# being delivered. Its failure close must take the ordinary bounded retry at
+# once - never deferring it to the end of that delivery - or the live
+# generation sits with no watcher and no retry for the whole delivery.
+test_watch_extension_successor_failure_during_delivery_retries_at_once() {
+  local repo home log stop out status
+  repo="$TMP_ROOT/watch-mid-delivery-failure/repo"; home="$TMP_ROOT/watch-mid-delivery-failure/home"; log="$TMP_ROOT/watch-mid-delivery-failure/arm.log"
+  stop="$TMP_ROOT/watch-mid-delivery-failure.stop"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+if [ "$count" -eq 1 ]; then
+  printf 'signal: wake before the successor dies\n'
+  exit 0
+fi
+if [ "$count" -eq 2 ]; then
+  sleep 0.1
+  printf 'watcher: FAILED - successor lost its beacon\n'
+  exit 3
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" \
+    FM_WATCH_REARM_RETRY_BASE_MS=5 FM_WATCH_REARM_RETRY_MAX_MS=10 FM_WATCH_REARM_RETRY_LIMIT=2 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map(); let tool = null; const sent = [];
+let settleFirst = () => {};
+const firstDelivery = new Promise((resolve) => { settleFirst = resolve; });
+let sends = 0;
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { tool = t; },
+  sendUserMessage(m, o) {
+    sent.push({ m, o });
+    sends += 1;
+    return sends === 1 ? firstDelivery : undefined;
+  },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+const arms = () => existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").split("\n").filter((row) => row.startsWith("arm=")).length
+  : 0;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor(pred, label) {
+  for (let i = 0; i < 500; i += 1) {
+    if (pred()) return;
+    await sleep(10);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+await tool.execute();
+await waitFor(() => sent.length === 1, "the first wake's follow-up acceptance");
+if (arms() !== 2) throw new Error(`expected the verified successor before delivery, got ${arms()} arms`);
+// The successor dies while the first wake's delivery is still held; the
+// bounded retry must restore the watcher before that delivery settles.
+await waitFor(() => arms() === 3, "a bounded retry while the delivery is still held");
+settleFirst();
+await sleep(150);
+if (arms() !== 3) throw new Error(`the immediate retry was not single-flight: ${arms()} arms`);
+if (sent.length !== 1) throw new Error(`a bounded retry surfaced an extra follow-up: ${JSON.stringify(sent)}`);
+if (!sent[0].m.includes("signal: wake before the successor dies")) throw new Error(`the delivered wake lost its reason: ${sent[0].m}`);
+if (sent[0].m.includes("watcher: FAILED")) throw new Error(`a within-budget retry reached main as a failure: ${sent[0].m}`);
+await handlers.get("session_shutdown")({}, {});
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp must retry a verified successor at once while its wake delivery is still held: $out"
+  [ -z "$out" ] || fail "omp successor-dies-mid-delivery test printed output: $out"
+  pass ".omp watch extension: a successor failing mid-delivery is retried at once, single-flight, with no failure follow-up"
+}
+
+# Two failures chained mid-delivery take their bounded retries one close at a
+# time while the delivery is still held, and settling that delivery later
+# starts no extra arm work.
+test_watch_extension_chained_mid_delivery_failures_retry_at_once() {
+  local repo home log stop release out status
+  repo="$TMP_ROOT/watch-mid-delivery-chain/repo"; home="$TMP_ROOT/watch-mid-delivery-chain/home"; log="$TMP_ROOT/watch-mid-delivery-chain/arm.log"
+  stop="$TMP_ROOT/watch-mid-delivery-chain.stop"; release="$TMP_ROOT/watch-mid-delivery-chain.release"
+  install_omp_extension_fixture "$repo"
+  mkdir -p "$home/state"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  printf 'confirmed generation=%s watcher=%s\n' "$2" "$4" >> "${FM_ARM_LOG:?}"
+  exit 0
+fi
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: wake before two chained failures\n'
+  exit 0
+fi
+if [ "$count" -eq 2 ]; then
+  printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+  while [ ! -e "${FM_RELEASE_FILE:?}" ]; do sleep 0.02; done
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+if [ "$count" -eq 3 ]; then
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_RELEASE_FILE="$release" \
+    FM_WATCH_REARM_RETRY_BASE_MS=20 FM_WATCH_REARM_RETRY_MAX_MS=40 \
+    EXT="$repo/.omp/extensions/fm-primary-omp-watch.ts" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const handlers = new Map(); let tool = null; const sent = [];
+let settleFirst = () => {};
+const firstDelivery = new Promise((resolve) => { settleFirst = resolve; });
+let sends = 0;
+const pi = {
+  on(e, h) { handlers.set(e, h); },
+  registerCommand() {},
+  registerTool(t) { tool = t; },
+  sendUserMessage(m, o) {
+    sent.push({ m, o });
+    sends += 1;
+    return sends === 1 ? firstDelivery : undefined;
+  },
+};
+const mod = await import(pathToFileURL(process.env.EXT).href);
+mod.default(pi);
+const rows = () => existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
+  : [];
+const arms = () => rows().filter((row) => row.startsWith("arm=")).length;
+const confirmed = () => rows().filter((row) => row.startsWith("confirmed generation=")).length;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor(pred, label) {
+  for (let i = 0; i < 500; i += 1) {
+    if (pred()) return;
+    await sleep(10);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+await tool.execute();
+await waitFor(() => sent.length === 1, "the first wake's follow-up acceptance");
+if (arms() !== 2) throw new Error(`expected the verified successor behind the wake, got ${arms()} arms: ${rows().join(" | ")}`);
+// The successor and the retry behind it both fail while the delivery is held;
+// both bounded retries run at their closes, not at that delivery's settle.
+writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
+await waitFor(() => arms() === 3, "the successor's immediate retry while the delivery is still held");
+await waitFor(() => arms() === 4, "the chained retry's own retry while the delivery is still held");
+settleFirst();
+await sleep(150);
+if (arms() !== 4) throw new Error(`settling the held delivery started extra arm work: ${rows().join(" | ")}`);
+if (sent.length !== 1) throw new Error(`failure closes reached main: ${JSON.stringify(sent)}`);
+if (!sent[0].m.includes("signal: wake before two chained failures")) throw new Error(`the delivered wake lost its reason: ${sent[0].m}`);
+if (sent[0].m.includes("watcher: FAILED")) throw new Error(`within-budget retries reached main as a failure: ${sent[0].m}`);
+if (confirmed() !== 1) throw new Error(`only the delivered wake may confirm the handling handoff, got ${confirmed()}: ${rows().join(" | ")}`);
+await handlers.get("session_shutdown")({}, {});
+process.exit(0);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "omp must chain bounded retries at once during a held delivery: $out"
+  [ -z "$out" ] || fail "omp chained mid-delivery retry test printed output: $out"
+  pass ".omp watch extension: chained mid-delivery failures retry at once and the settle adds no arm work"
+}
+
 test_detection_anchored_name_and_marker_precedence
 test_lock_identity_and_liveness_classification
 test_spawn_launch_line_and_worker_wiring
@@ -982,3 +1266,6 @@ test_watch_extension_runs_the_supervision_host quiet
 test_watch_extension_keeps_the_arm_without_the_file_or_with_off
 test_watch_extension_replays_a_host_only_boundary_across_replacement
 test_watch_extension_delivers_a_split_host_close_whole
+test_watch_extension_actionable_close_mid_delivery_rearms_at_once
+test_watch_extension_successor_failure_during_delivery_retries_at_once
+test_watch_extension_chained_mid_delivery_failures_retry_at_once

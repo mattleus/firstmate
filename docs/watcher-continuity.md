@@ -141,6 +141,9 @@ After an actionable Pi, omp, or OpenCode child close, the adapter:
 3. Confirms the handling handoff before scheduling the follow-up: Pi confirms against the restoration's own recovery token, while omp and OpenCode confirm against the current successor.
 4. Delivers the original wake.
 
+omp starts that successor the moment the child close fires, before and independently of delivering any earlier wake: the restore step's readiness waits and bounded backoffs, and the follow-up's own acceptance, can hold the delivery pipeline, and gating continuity on that settlement leaves the home with no watcher for the whole wait.
+Any other close of a live generation takes its ordinary bounded, lock-checked retry at the close as well; the per-pending restore step then finds the successor already in place and only verifies, confirms, and delivers.
+
 A complete Pi reason line can be observed while the predecessor is still finishing durable cleanup.
 That line is retained for replacement handoff, but the adapter never treats that already-ready predecessor as its own successor.
 

@@ -2391,10 +2391,10 @@ EOF
 }
 
 # A verified successor that closes while its wake is still being delivered
-# defers its retry to the end of that delivery. If a manual repair meanwhile
-# left a dead-but-unclosed arm in the slot, the deferred retry must still
-# start a fresh arm.
-test_pi_deferred_close_starts_fresh_arm_over_dead_child() {
+# takes its bounded retry at once, leaving the delivery itself unchanged. If a
+# manual repair afterwards finds that retry's arm dead-but-unclosed in the
+# slot, the repair must still start a fresh arm.
+test_pi_mid_delivery_failure_retry_then_repair_over_dead_child() {
   local repo home plugin log stop release out status
   repo="$TMP_ROOT/pi-deferred-dead-root"
   home="$TMP_ROOT/pi-deferred-dead-home"
@@ -2480,25 +2480,26 @@ for (let i = 0; i < 250 && !deliveryStarted; i += 1) await sleep(20);
 if (!deliveryStarted) throw new Error("the restored wake was never delivered");
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
 await waitForExit(successorPid);
-await sleep(100);
+// The failed successor's bounded retry runs while the delivery is still held.
+await waitForExit(await waitForArms(3));
 const repair = await tool.execute("tool-call-deferred-dead-repair", {}, undefined, undefined, {});
 if (!repair.content[0].text.includes("started Pi extension arm child")) {
-  throw new Error(`repair did not start an arm after the successor closed: ${repair.content[0].text}`);
+  throw new Error(`repair did not start an arm over the dead retry arm: ${repair.content[0].text}`);
 }
-await waitForExit(await waitForArms(3));
+await waitForArms(4);
 finishDelivery();
-for (let i = 0; i < 250 && armRows().length < 4; i += 1) await sleep(20);
+await sleep(150);
 if (armRows().length !== 4) {
-  throw new Error(`the deferred close started no retry over the dead repair arm: ${armRows().join(" | ")}`);
+  throw new Error(`settling the held delivery started extra arm work: ${armRows().join(" | ")}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
 )
   status=$?
-  expect_code 0 "$status" "Pi deferred close must start a fresh arm over a dead child handle: $out"
-  [ -z "$out" ] || fail "Pi deferred-close dead-child test printed output: $out"
-  pass "Pi deferred close starts a fresh arm instead of stalling on a dead child"
+  expect_code 0 "$status" "Pi mid-delivery failure must retry at once and a repair must still start a fresh arm over a dead child handle: $out"
+  [ -z "$out" ] || fail "Pi mid-delivery retry and dead-child repair test printed output: $out"
+  pass "Pi retries a mid-delivery successor failure at once and a repair still starts a fresh arm over the dead child"
 }
 
 test_pi_hung_successor_falls_back_to_typed_wake() {
@@ -3453,6 +3454,11 @@ cleanup() { rm -f "$marker"; }
 trap cleanup EXIT
 trap 'exit 0' TERM INT
 printf 'arm pid=%s marker=%s\n' "$$" "$marker" >> "${FM_ARM_LOG:?}"
+# A new arm retires the previous one, as a --restart arm retiring the arm it
+# replaces does.
+previous=$(cat "${FM_MARKER_ROOT:?}/.last-arm-pid" 2>/dev/null || true)
+printf '%s\n' "$$" > "${FM_MARKER_ROOT:?}/.last-arm-pid"
+[ -z "$previous" ] || kill -TERM "$previous" 2>/dev/null || true
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=replacement-fixture\n' "$$"
 while :; do
   if [ -e "$FM_TRIGGER_FILE" ]; then
@@ -3562,10 +3568,14 @@ if (previous.prompts.length !== 0) {
 }
 await waitFor(() => liveArms().length === 1 && armRows().length >= 2, "old-session successor");
 writeFileSync(process.env.FM_TRIGGER_FILE, "replacement-successor actionable outcome\n");
-await waitFor(() => liveArms().length === 0, "mid-delivery successor actionable close");
+// That close arms the next successor at once, while the first wake's branch
+// delivery is still held.
+await waitFor(() => liveArms().length === 1 && armRows().length === 3, "close-time successor while the first delivery is held");
 
 await previous.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "new" }, {});
-await waitFor(() => liveArms().length === 0, "retired old-session successor");
+// The old generation's established arm is retained until its replacement
+// commits its own.
+await waitFor(() => liveArms().length === 1 && armRows().length === 3, "old-session arm retained across replacement shutdown");
 
 const replacement = makePi(false);
 const replacementMod = await import(`${pathToFileURL(process.env.PLUGIN).href}?replacement=durable-handoff`);
@@ -3576,7 +3586,7 @@ const replacementStart = replacement.handlers.get("session_start")?.({
   previousSessionFile: "/tmp/previous.jsonl",
 }, {});
 await new Promise((resolve) => setTimeout(resolve, 50));
-await waitFor(() => liveArms().length === 1 && armRows().length >= 3, "replacement arm before old delivery settlement");
+await waitFor(() => liveArms().length === 1 && armRows().length >= 4, "replacement arm before old delivery settlement");
 if (replacement.prompts.some((message) => message.includes("signal: replacement-race actionable outcome"))) {
   throw new Error(`replacement raced the accepted old-session delivery: ${replacement.prompts.join(" | ")}`);
 }
@@ -3867,11 +3877,11 @@ EOF
 }
 
 # A verified successor can die while the wake it was started for is still
-# being delivered (a branch turn can take minutes). Its failure close arrives
-# while the pipeline is busy, so the ordinary retry path must be deferred to
-# the end of that delivery rather than skipped, or the live generation is left
-# with no watcher and no retry.
-test_pi_successor_failure_during_delivery_is_retried_after_delivery() {
+# being delivered, and a wake granted to the supervision branch can hold that
+# delivery for a whole branch turn. Its failure close must take the ordinary
+# bounded retry at once - never deferring it to the end of that delivery - or
+# the live generation sits with no watcher and no retry for the whole turn.
+test_pi_successor_failure_during_delivery_retries_at_once() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-successor-dies-mid-delivery-root"
   home="$TMP_ROOT/pi-successor-dies-mid-delivery-home"
@@ -3946,22 +3956,151 @@ mod.default(pi);
 await tool.execute("initial-arm", {}, undefined, undefined, {});
 await waitFor(() => branchAccepted, "branch accepted the wake behind a verified successor");
 if (arms() !== 2) throw new Error(`expected the verified successor before delivery, got ${arms()} arms`);
-// The successor dies while the branch still holds the delivery.
-await new Promise((resolve) => setTimeout(resolve, 300));
-if (arms() !== 2) throw new Error(`a retry launched while the delivery was still in flight: ${arms()} arms`);
+// The successor dies while the branch still holds the delivery; the bounded
+// retry must restore the watcher before that delivery settles.
+await waitFor(() => arms() === 3, "a bounded retry while the branch still holds the delivery");
 releaseBranch();
-await waitFor(() => arms() === 3, "a retry watcher after the delivery settled");
 await new Promise((resolve) => setTimeout(resolve, 150));
-if (arms() !== 3) throw new Error(`the deferred retry was not single-flight: ${arms()} arms`);
+if (arms() !== 3) throw new Error(`the immediate retry was not single-flight: ${arms()} arms`);
 if (prompts.length !== 0) throw new Error(`a bounded retry surfaced a failure prompt: ${prompts.join(" | ")}`);
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 process.exit(0);
 EOF
 )
   status=$?
-  expect_code 0 "$status" "Pi must retry a verified successor that failed during wake delivery"
+  expect_code 0 "$status" "Pi must retry a verified successor at once while its wake delivery is still held"
   [ -z "$out" ] || fail "Pi successor-dies-mid-delivery test printed output: $out"
-  pass "Pi retries a verified successor that failed during wake delivery once that delivery settles"
+  pass "Pi retries a verified successor that failed during wake delivery without waiting for it"
+}
+
+# The stall evidence behind this fix: with a wake granted to the supervision
+# branch, the next actionable child close was only queued behind that branch
+# turn, which can hold the delivery for minutes, and no successor was armed in
+# the meantime - the ledger then kept exit rows with no successor until a
+# manual repair prodded one. The close itself must arm the successor at once,
+# and the queued wake still reaches the branch when the held turn settles.
+test_pi_actionable_close_during_branch_turn_rearms_at_once() {
+  local repo home plugin log stop release out status
+  repo="$TMP_ROOT/pi-branch-turn-rearm-root"
+  home="$TMP_ROOT/pi-branch-turn-rearm-home"
+  log="$TMP_ROOT/pi-branch-turn-rearm.log"
+  stop="$TMP_ROOT/pi-branch-turn-rearm.stop"
+  release="$TMP_ROOT/pi-branch-turn-rearm.release"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  printf 'confirmed generation=%s watcher=%s\n' "$2" "$4" >> "${FM_ARM_LOG:?}"
+  exit 0
+fi
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: first wake granted to the branch\n'
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+if [ "$count" -eq 2 ]; then
+  while [ ! -e "${FM_RELEASE_FILE:?}" ] && [ -e "$0" ]; do sleep 0.02; done
+  printf 'signal: second wake while the branch holds the first\n'
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ] && [ -e "$0" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_RELEASE_FILE="$release" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+const offers = [];
+const prompts = [];
+let settleFirst = () => {};
+const firstSettlement = new Promise((resolve) => {
+  settleFirst = resolve;
+});
+let offerCount = 0;
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async (message) => {
+    prompts.push(message);
+  },
+  events: {
+    on() {},
+    emit(event, data) {
+      if (event !== "fm-branch-supervision:dispatch") return;
+      offerCount += 1;
+      offers.push(data.message);
+      // The first branch turn holds its settlement open; the second settles
+      // immediately. Both are accepted either way, so nothing falls to main.
+      data.accept(offerCount === 1 ? firstSettlement : undefined);
+    },
+  },
+};
+const arms = () => existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").split("\n").filter((row) => row.startsWith("arm=")).length
+  : 0;
+const confirmed = () => existsSync(process.env.FM_ARM_LOG)
+  ? readFileSync(process.env.FM_ARM_LOG, "utf8").split("\n").filter((row) => row.startsWith("confirmed generation=")).length
+  : 0;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor(pred, label) {
+  for (let i = 0; i < 500; i += 1) {
+    if (pred()) return;
+    await sleep(10);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+writeFileSync(`${process.env.FM_HOME}/state/branch-turn.meta`, "project=/projects/branch-turn\nwindow=fm-branch-turn\n");
+writeFileSync(`${process.env.FM_HOME}/state/.wake-queue`, "1\t1\tsignal\tbranch-turn.status\tsignal: first wake granted to the branch\n");
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("initial-arm", {}, undefined, undefined, {});
+await waitFor(() => offers.length === 1, "first wake offered to and accepted by the branch");
+if (arms() !== 2) throw new Error(`expected the successor behind the offered wake, got ${arms()} arms`);
+if (!offers[0].includes("signal: first wake granted to the branch")) {
+  throw new Error(`first offer lost its reason: ${offers[0]}`);
+}
+// The successor closes actionably while the branch still holds the first
+// wake's settlement; continuity must not wait for that turn to finish.
+writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
+await waitFor(() => arms() === 3, "a live successor while the first branch turn is still in flight");
+if (prompts.length !== 0) {
+  throw new Error(`main saw a fallback or alarm while continuity held: ${prompts.join(" | ")}`);
+}
+settleFirst();
+await waitFor(() => offers.length === 2, "the queued second wake delivered to the branch once the held turn settled");
+if (!offers[1].includes("signal: second wake while the branch holds the first")) {
+  throw new Error(`second offer lost its reason: ${offers[1]}`);
+}
+await sleep(150);
+if (arms() !== 3) {
+  throw new Error(`settling the held branch turn started extra arm work: ${arms()} arms`);
+}
+if (confirmed() !== 2) {
+  throw new Error(`expected one handling confirmation per delivered wake, got ${confirmed()}`);
+}
+if (prompts.length !== 0) {
+  throw new Error(`a branch-owned wake reached main: ${prompts.join(" | ")}`);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "Pi must re-arm at once when a successor closes during a branch-held delivery: $out"
+  [ -z "$out" ] || fail "Pi branch-turn re-arm test printed output: $out"
+  pass "Pi actionable close during a branch-held turn re-arms at once and still delivers the queued wake to the branch"
 }
 
 test_pi_late_retiring_actionable_reaches_replacement() {
@@ -5785,7 +5924,7 @@ test_pi_superseded_delivery_is_offered_to_branch
 test_pi_extension_log_stays_off_unless_opted_in
 test_pi_repair_starts_fresh_arm_over_dead_child
 test_pi_scheduled_retry_starts_fresh_arm_over_dead_child
-test_pi_deferred_close_starts_fresh_arm_over_dead_child
+test_pi_mid_delivery_failure_retry_then_repair_over_dead_child
 test_pi_failed_case_poller_is_reaped_as_a_group
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry
@@ -5800,7 +5939,8 @@ test_pi_session_transition_generation_owner
 test_pi_session_replacement_carries_inflight_actionable_close
 test_pi_streaming_followup_is_replayed_after_replacement
 test_pi_streaming_time_delivery_keeps_the_successor_chain
-test_pi_successor_failure_during_delivery_is_retried_after_delivery
+test_pi_successor_failure_during_delivery_retries_at_once
+test_pi_actionable_close_during_branch_turn_rearms_at_once
 test_pi_late_retiring_actionable_reaches_replacement
 test_pi_replacement_tokens_are_process_unique
 test_pi_replacement_persistence_failure_keeps_predecessor_until_successor

@@ -141,7 +141,7 @@ After an actionable Pi, omp, or OpenCode child close, the adapter:
 3. Confirms the handling handoff before scheduling the follow-up: Pi confirms against the restoration's own recovery token, while omp and OpenCode confirm against the current successor.
 4. Delivers the original wake.
 
-omp starts that successor the moment the child close fires, before and independently of delivering any earlier wake: the restore step's readiness waits and bounded backoffs, and the follow-up's own acceptance, can hold the delivery pipeline, and gating continuity on that settlement leaves the home with no watcher for the whole wait.
+Pi and omp each start that successor the moment the child close fires, before and independently of delivering any earlier wake: a Pi wake granted to the supervision branch settles only when that branch turn finishes, and omp's restore readiness waits, bounded backoffs, and follow-up acceptance can hold the pipeline just as long, while gating continuity on that settlement leaves the home with no watcher for the whole wait.
 Any other close of a live generation takes its ordinary bounded, lock-checked retry at the close as well; the per-pending restore step then finds the successor already in place and only verifies, confirms, and delivers.
 
 A complete Pi reason line can be observed while the predecessor is still finishing durable cleanup.
@@ -474,7 +474,8 @@ The same suite covers ordinary same-process session replacement for `/new`, `/re
 - Terminal quit still refusing late rearm.
 - A mid-restore marker advance that delivers the wake with no rejection appendix, offers it to an accepting supervision branch like a confirmed delivery, and records the attempt and the confirm result in the bounded extension log when opted in.
 - A failed confirmation for a stale successor that spares a newer arm started by a repair.
-- A repair, a scheduled retry, and a deferred close over a dead-but-unclosed arm child that each start a fresh arm instead of stalling.
+- A repair, a scheduled retry, and an immediate retry for a failure close mid-delivery each still start a fresh arm over a dead-but-unclosed child instead of stalling.
+- A wake granted to the supervision branch no longer parks continuity for its whole turn: an actionable close mid-branch-turn arms the next successor at once, and the queued wake still reaches the branch when the held turn settles.
 
 The guard and session-start suites prove that active generation evidence tolerates a fresh-beacon handoff.
 They also prove that a legacy or handoff-phase watcher marker from an absent replacement extension still raises the outage diagnostic.

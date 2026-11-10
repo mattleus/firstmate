@@ -25,6 +25,17 @@
 // Either user boundary finishes the pending record, and a still-unconsumed
 // record rides the replacement handoff.
 //
+// Continuity versus delivery (stated once here):
+// Wake delivery can outlive the watcher that reported it: a wake granted to
+// the supervision branch settles only when that branch turn finishes, and a
+// queued main follow-up can hold the pipeline just as long. Continuity
+// therefore belongs to the close handler, not the delivery pipeline: every
+// arm-child close of a live generation starts its successor immediately (an
+// actionable close) or takes its ordinary bounded, lock-checked retry (any
+// other close), so the fleet is never left without a watcher for the length
+// of a delivery. The per-pending restore step then finds that successor
+// already in place and only verifies, confirms, and delivers.
+//
 // Postures (stated once here; docs/pi-supervision-branch.md "Postures"):
 // the away-posture record state/.afk-contract is read as a file at every
 // routing decision, never inferred from chat. While it exists every
@@ -114,10 +125,6 @@ type SessionGeneration = {
   // replacement began reads it to tell a main-queued wake (replayed) from a
   // branch-handled one (finished).
   unconsumedWakes: Map<string, UnconsumedWake>;
-  // A verified successor's failure close that arrived while the pipeline was
-  // still delivering the wake it was started for; its bounded retry runs once
-  // that delivery settles instead of being skipped by the single-flight guard.
-  deferredClose: { message: string; predecessorArmPid: string } | null;
 };
 
 function refreshWatchToolShell(
@@ -561,7 +568,6 @@ function createGeneration(): SessionGeneration {
     pendingActionables: [],
     cleanupFailure: "",
     unconsumedWakes: new Map(),
-    deferredClose: null,
   };
 }
 
@@ -905,9 +911,6 @@ export default function (pi: ExtensionAPI) {
           }
         };
         try {
-          // A new restoration supersedes whatever became of the previous
-          // successor; only a failure during this delivery is retried after it.
-          owner.deferredClose = null;
           const restoration = await restoreAfterActionableClose(owner, pending.predecessorArmPid);
           if (!generationIsLive(owner)) {
             settleClaim("failed");
@@ -954,19 +957,15 @@ export default function (pi: ExtensionAPI) {
       if (generationIsLive(owner)) {
         owner.restoring = false;
         if (owner.pendingActionables.some((pending) => pending.delivered)) schedulePendingCleanup(owner);
-        // No bare arm is launched here. A generation without a child at this
-        // point has either delivered a typed restoration failure after its
+        // No bare arm is launched here. Continuity belongs to the close
+        // handler: every close of a live generation has already started its
+        // successor or scheduled its bounded retry by the time the pipeline
+        // runs, and each pending's restore step only verifies and confirms
+        // that successor before delivering. A generation without a child at
+        // this point has delivered a typed restoration failure after its
         // bounded retries, which hands repair to main through fm_watch_arm_pi
         // (one more silent launch past the bound could hold a hung child that
-        // the repair call would then report as "unchanged"), or lost a
-        // verified successor during the delivery, which takes the ordinary
-        // bounded, lock-checked retry it would have taken had the pipeline
-        // been idle.
-        const deferred = owner.deferredClose;
-        owner.deferredClose = null;
-        if (deferred && !liveArmChild(owner) && !owner.retryTimer) {
-          scheduleRetry(owner, deferred.message, deferred.predecessorArmPid);
-        }
+        // the repair call would then report as "unchanged").
       }
     }
   }
@@ -1119,7 +1118,6 @@ export default function (pi: ExtensionAPI) {
     let stderr = "";
     let settled = false;
     let readinessSettled = false;
-    let verified = false;
     let resolveReadiness: (ready: boolean) => void = () => {};
     let resolveClosed: () => void = () => {};
     const readiness = new Promise<boolean>((resolveReady) => {
@@ -1133,7 +1131,6 @@ export default function (pi: ExtensionAPI) {
     const settleReadiness = (ready: boolean): void => {
       if (readinessSettled) return;
       readinessSettled = true;
-      verified = ready;
       resolveReadiness(ready);
     };
     const observeEstablishedArm = (): void => {
@@ -1174,21 +1171,38 @@ export default function (pi: ExtensionAPI) {
         enqueuePendingActionable(owner, pending);
         if (!generationIsLive(owner)) return;
         owner.retryFailures = 0;
+        // Restore continuity at close, before any delivery work below: a wake
+        // granted to the supervision branch settles only when that branch turn
+        // finishes, and a held main follow-up takes comparable time, so a
+        // successor start gated on that settlement leaves the home with no
+        // watcher for the whole delivery. startArm no-ops while a live child
+        // or a scheduled retry owns the slot; a start it cannot complete is
+        // retried and surfaced by the pending's pipeline restore below, so
+        // this call only narrows the unwatched window and never replaces the
+        // bounded-retry contract.
+        if (!owner.retryTimer) {
+          const continuity = startArm(owner, predecessor);
+          if (!continuity.ok) {
+            appendExtensionLog(`continuity start after actionable close failed: ${continuity.message}`);
+          }
+        }
         void processPendingActionables(owner);
         return;
       }
       if (!generationIsLive(owner)) return;
-      if (owner.restoring) {
-        // The pipeline is still delivering the wake this successor was
-        // started for. A verified successor that failed on its own keeps its
-        // bounded retry for the end of that delivery; an unready child closing
-        // here was retired by the restoration itself.
-        if (verified && !armRetired.has(armChild)) {
-          owner.deferredClose = { message: classification.message, predecessorArmPid: predecessor };
-        }
-        return;
+      // A close this extension did not schedule earns the ordinary bounded,
+      // lock-checked retry immediately, even while an earlier wake is still
+      // being delivered: that delivery can sit behind a multi-minute branch
+      // turn, and gating continuity on it left the fleet with no watcher for
+      // the whole turn. scheduleRetry itself no-ops while a live child or a
+      // scheduled retry already owns the slot. The one skip is a child the
+      // in-flight restoration itself retired: its close is a retireArm
+      // consequence, not a failure of the successor. A retained child that
+      // outlasted its own retirement closes only after the pipeline has
+      // settled, so its late close resumes supervision exactly as before.
+      if (!(owner.restoring && armRetired.has(armChild))) {
+        scheduleRetry(owner, classification.message, predecessor);
       }
-      scheduleRetry(owner, classification.message, predecessor);
     });
     armChild.on("error", (error: Error) => {
       if (settled) return;
@@ -1197,7 +1211,6 @@ export default function (pi: ExtensionAPI) {
       settleReadiness(false);
       releaseChild();
       if (!generationIsLive(owner)) return;
-      if (owner.restoring) return;
       scheduleRetry(owner, `watcher: FAILED - Pi extension arm child ${id} failed: ${error.message}`, String(armChild.pid ?? ""));
     });
     return {

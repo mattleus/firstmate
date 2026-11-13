@@ -258,12 +258,13 @@
 #   name from PATH once, probes that concrete path with --help, and launches the
 #   same path. It adds --tui-mode regular only when that help advertises the flag;
 #   a failed or inconclusive probe omits it so older Pi versions remain launchable.
-#   A --secondmate launch of a Firstmate-seeded home (the existing
-#   .fm-secondmate-home marker validate_firstmate_home_for_spawn already requires)
-#   also adds --approve when that help advertises it, so the first unattended
-#   launch does not stall on Pi's "Trust project folder?" dialog for that home
-#   path; --approve is session-scoped to the launch cwd and does not rewrite the
-#   operator's trust.json. Ordinary Pi worker launches never receive --approve.
+#   Every pi and pi-signed launch adds --approve when that help advertises it, so
+#   the first unattended launch never stalls on Pi's "Trust project folder?"
+#   dialog for the launch path. Pi persists trust per directory and pooled
+#   worktree slots allocate a fresh path every spawn, so an unattended worker
+#   could sit on that dialog forever (observed on a fresh treehouse pool slot,
+#   2026-11-10). --approve is session-scoped to the launch cwd and does not
+#   rewrite the operator's trust.json.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
 #   Devin is worker-only: --permission-mode dangerous and
@@ -532,8 +533,8 @@
 #                  state/<task-id>.claude-settings.json for a secondmate
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
 #     __PITUIMODE__ optional --tui-mode regular when that executable advertises it
-#     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
-#                  that executable advertises the flag (empty otherwise; session
+#     __PIAPPROVE__ optional --approve on any Pi/pi-signed launch when that
+#                  executable advertises the flag (empty otherwise; session
 #                  trust for the launch cwd only, never a trust.json rewrite)
 #     __PIEXCLUDE__ optional ` --exclude-tools '<comma-joined names>'` from
 #                  config/crew-exclude-tools on Pi/pi-signed ship and scout
@@ -2681,9 +2682,10 @@ pi_supports_tui_mode() {
 }
 
 # Same help-probe shape as pi_supports_tui_mode for the session-scoped project
-# trust flag. A seeded secondmate home carries tracked .pi/extensions that gate
-# Pi behind "Trust project folder?" on first launch; --approve trusts that
-# launch cwd for the run without rewriting ~/.pi/agent/trust.json.
+# trust flag. Seeded secondmate homes carry tracked .pi/extensions, and pooled
+# worktree slots are fresh paths Pi has never trusted, so either shape gates an
+# unattended launch behind "Trust project folder?" on first launch; --approve
+# trusts the launch cwd for the run without rewriting ~/.pi/agent/trust.json.
 pi_supports_approve() {
   local executable=$1 help
   help=$("$executable" --help 2>&1) || return 1
@@ -3333,12 +3335,14 @@ pi | pi-signed)
     PI_TUI_MODE=' --tui-mode regular'
   fi
   LAUNCH=${LAUNCH//__PITUIMODE__/$PI_TUI_MODE}
-  # Seeded-home signal is .fm-secondmate-home (required by
-  # validate_firstmate_home_for_spawn before any secondmate launch reaches
-  # the pane). Session-only --approve; never expand to a parent path or
-  # rewrite the operator trust store.
+  # Seeded secondmate homes carry tracked .pi/extensions, and pooled worktree
+  # slots are fresh paths Pi has never trusted; either shape can park an
+  # unattended launch on "Trust project folder?". Session-only --approve on
+  # every launch when advertised; never expand to a parent path or rewrite the
+  # operator trust store. A failed or inconclusive --help probe leaves the
+  # launch intact without the flag, so a grant miss never aborts a spawn.
   PI_APPROVE=
-  if [ "$KIND" = secondmate ] && pi_supports_approve "$PI_BIN"; then
+  if pi_supports_approve "$PI_BIN"; then
     PI_APPROVE=' --approve'
   fi
   LAUNCH=${LAUNCH//__PIAPPROVE__/$PI_APPROVE}

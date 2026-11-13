@@ -558,16 +558,19 @@ The lab home was deleted and the test entry was removed from the store and verif
 That automated spawn case runs against a fake claude, so it asserts the store entry and the launch command and nothing more; the live arms above are what establish that the entry actually suppresses the dialog.
 The composer-classification record below observes the same gate from the other side, where an untrusted worktree left Claude, Grok, and Muse unverified because the guard reads a first-launch trust dialog as an unreadable composer.
 
-## Pi seeded-secondmate project trust
+## Pi project trust (--approve)
 
-[`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the seeded-secondmate project-trust approval contract and compatibility fallback.
-The live guard below isolates Pi's trust-gate behavior in secondmate-shaped homes; portable launch-command coverage separately verifies that spawn selects the flag for the intended launches.
+[`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the project-trust approval contract and compatibility fallback.
+Every pi and pi-signed launch carries `--approve` when that binary advertises it, because a seeded secondmate home and a pooled worktree slot are both fresh paths Pi has never trusted, and an unattended launch parked on "Trust project folder?" never starts.
+The live guard below isolates Pi's trust-gate behavior in secondmate-shaped and worker-shaped fresh paths; portable launch-command coverage separately verifies that spawn selects the flag for the intended launches.
 
-Verified 2026-10-02 on pi 0.82.0 through the default-on live guard (disposable `PI_CODING_AGENT_DIR` / `HOME` only; never `~/.pi`):
+Verified 2026-10-02 on pi 0.82.0 through the default-on live guard, and re-verified 2026-11-13 on pi 1.5.2 including the new worker-shaped arm; disposable `PI_CODING_AGENT_DIR` / `HOME` only, never `~/.pi` (token-free: no prompt is submitted and no dialog key is typed).
 
 ```sh
 bash tests/fm-pi-seeded-home-trust-live-e2e.test.sh
 ```
+
+2026-10-02, pi 0.82.0, three arms:
 
 ```
 # live pi version: 0.82.0
@@ -577,7 +580,18 @@ ok - unseeded path without --approve still prompts on Trust project folder?
 # all fm-pi-seeded-home-trust-live-e2e checks passed (3)
 ```
 
-Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_worker_launch_omits_seeded_home_approve`, `test_pi_approve_probe_omits_unsupported_flag`).
+On 2026-11-13 the workspace slot running this check had no tmux, so the four-arm guard capability-skipped there; the worker-shaped arm was instead proven live through a direct one-off pty run (`script -q <typescript> env PI_OFFLINE=1 HOME=… PI_CODING_AGENT_DIR=… pi [--approve] --no-session --no-skills --no-prompt-templates`) with the real binary in two fresh temporary directories standing in for bare pool slots:
+
+```
+ok - fresh worker-shaped path with --approve starts past Trust project folder?
+ok - --approve left trust.json unchanged
+ok - same fresh path without --approve still shows Trust project folder?
+# all live checks passed; pi 1.5.2
+```
+
+The without-flag control showed the real dialog with its four-choice options (Trust, Trust parent folder, "Trust (this session only)", "Do not trust"), which is the exact stall fm-spawn now prevents on unattended launches.
+
+Portable launch-command coverage lives in `tests/fm-spawn-dispatch-profile.test.sh` (`test_pi_seeded_secondmate_preapproves_project_trust`, `test_pi_worker_launch_preapproves_project_trust_when_advertised`, `test_pi_worker_launch_omits_unadvertised_approve`, `test_pi_approve_probe_omits_unsupported_flag`).
 
 ## Launch-prompt backstop signatures
 

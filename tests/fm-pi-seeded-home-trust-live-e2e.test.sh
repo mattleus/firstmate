@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Live guard for fm-spawn's Pi seeded-secondmate --approve preflight.
+# Live guard for fm-spawn's Pi --approve preflight.
 #
-# Reproduces the Pi "Trust project folder?" stall on a freshly seeded
-# secondmate-shaped home (tracked .pi/extensions + .fm-secondmate-home) under a
-# disposable PI_CODING_AGENT_DIR, then proves the spawn-side --approve flag
-# clears that stall without rewriting the disposable trust store. An unseeded
-# path without --approve still prompts.
+# Reproduces the Pi "Trust project folder?" stall on freshly seeded
+# secondmate-shaped homes (tracked .pi/extensions + .fm-secondmate-home) and on
+# unseeded worker-shaped paths under disposable PI_CODING_AGENT_DIR / HOME,
+# then proves the spawn-side --approve flag clears both stalls without
+# rewriting the disposable trust store. A fresh path without --approve still
+# prompts; that miss is the pool-slot stall spawn now prevents.
 #
 # Token-free: never submits a prompt and never answers the dialog with Enter.
 # Uses Escape / kill-server only. Never touches ~/.pi.
@@ -135,5 +136,34 @@ fi
 CHECKED=$((CHECKED + 1))
 pass "unseeded path without --approve still prompts on Trust project folder?"
 
-[ "$CHECKED" -ge 3 ] || fail "guard checked nothing useful (checked=$CHECKED)"
+# --- 4. Unseeded worker-shaped path WITH --approve starts past the dialog ---
+# This is the shape fm-spawn now launches for every pi/pi-signed worker: a
+# fresh path Pi has never trusted (like a pooled worktree slot) that carries
+# project-local material, launched with --approve like spawn does.
+WORKER="$LAB/worker-approve"
+mkdir -p "$WORKER/.pi/extensions"
+printf 'export default function () {}\n' > "$WORKER/.pi/extensions/dummy.ts"
+printf '{}\n' > "$PI_DIR/trust.json"
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s worker -n w -c "$WORKER" -- \
+  env HOME="$LAB/home-worker" PI_CODING_AGENT_DIR="$PI_DIR" PI_OFFLINE=1 \
+  "$PI_BIN" --approve --no-session --no-skills --no-prompt-templates \
+  || fail "could not launch pi with --approve on a worker-shaped path"
+if ! capture_until worker 'dummy|No models available|escape interrupt' 15 \
+  "$LAB/pane-worker.txt"; then
+  fail "worker-shaped path with --approve never reached a post-trust TUI within 15s:
+$(cat "$LAB/pane-worker.txt")"
+fi
+if printf '%s' "$(cat "$LAB/pane-worker.txt")" | grep -qiE 'Trust project folder'; then
+  fail "worker-shaped path with --approve still showed Trust project folder?:
+$(cat "$LAB/pane-worker.txt")"
+fi
+"$REAL_TMUX" -L "$SOCKET" send-keys -t worker:w Escape >/dev/null 2>&1 || true
+"$REAL_TMUX" -L "$SOCKET" kill-session -t worker >/dev/null 2>&1 || true
+TRUST_AFTER=$(cat "$PI_DIR/trust.json")
+[ "$TRUST_AFTER" = "{}" ] \
+  || fail " --approve rewrote the disposable trust store on the worker-shaped path: after=$TRUST_AFTER"
+CHECKED=$((CHECKED + 1))
+pass "unseeded worker-shaped path with --approve starts past the trust dialog without rewriting trust.json"
+
+[ "$CHECKED" -ge 4 ] || fail "guard checked nothing useful (checked=$CHECKED)"
 echo "# all fm-pi-seeded-home-trust-live-e2e checks passed ($CHECKED)"

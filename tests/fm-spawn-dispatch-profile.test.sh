@@ -1394,8 +1394,8 @@ test_pi_threads_model_and_max_effort() {
   expect_code 0 "$status" "pi spawn with max effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" pi openai-codex/gpt-5.6-sol max
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
-    "pi launch did not force the regular TUI while threading the requested model and max thinking level"
+  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular --approve --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
+    "pi launch did not force the regular TUI, pre-approve project trust, and thread the requested model and max thinking level"
   assert_not_contains "$launch" "FM_FIRSTMATE_PI_LAUNCH_BRIEF=" \
     "pi launch still exports the removed Calm input-reroute binding"
   assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
@@ -1416,8 +1416,8 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity() {
   assert_contains "$out" "spawned $id harness=pi-signed" "pi-signed spawn did not preserve its visible identity"
   assert_meta_profile "$HOME_DIR/state/$id.meta" pi-signed openai-codex/gpt-5.6-sol max
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
-    "pi-signed launch did not force the regular TUI with Pi's model, thinking, and extension semantics"
+  assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --approve --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
+    "pi-signed launch did not force the regular TUI, pre-approve project trust, and preserve Pi's model and thinking semantics"
   assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
     "pi-signed launch lost the canonical typed launch-brief envelope"
   assert_present "$HOME_DIR/state/$id.pi-ext.ts" "pi-signed launch did not install Pi's turn-end extension"
@@ -1504,7 +1504,7 @@ test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity() {
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
   assert_contains "$launch" "< '$sm/data/charter.md'" "secondmate launch lost its original charter"
   assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --approve -e '$sm/.pi/extensions/fm-primary-turnend-guard.ts' -e '$sm/.pi/extensions/fm-primary-pi-watch.ts'" \
-    "pi-signed secondmate did not force the regular TUI with Pi's primary extension launch shape and seeded-home --approve"
+    "pi-signed secondmate did not force the regular TUI with Pi's primary extension launch shape and pre-approved project trust"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf '# evidence begin: persistent secondmate\n%s\n' "$out"
     printf 'launch command:\n%s\noriginal charter:\n' "$launch"
@@ -1539,21 +1539,48 @@ test_pi_seeded_secondmate_preapproves_project_trust() {
   pass "seeded Pi/pi-signed secondmate launches carry session --approve when advertised"
 }
 
-test_pi_worker_launch_omits_seeded_home_approve() {
+test_pi_worker_launch_preapproves_project_trust_when_advertised() {
+  local harness rec id out status launch version
+  for harness in pi pi-signed; do
+    for version in 0.82.0 0.84.0; do
+      id="profile-${harness}-worker-approve-${version//./}-z8f"
+      rec=$(make_spawn_case "profile-${harness}-worker-approve-${version//./}" "$harness" "$id")
+      read_case_record "$rec"
+
+      out=$(FM_TEST_PI_VERSION="$version" \
+        run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+      status=$?
+      expect_code 0 "$status" "$harness $version ship spawn should succeed"
+      launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
+      assert_contains "$launch" "FM_PI_HARNESS=$harness '$FAKEBIN_DIR/$harness'" \
+        "$harness $version worker launch lost its probed executable"
+      assert_contains "$launch" "--approve" \
+        "$harness $version worker launch must pre-approve project trust when help advertises --approve"
+      assert_not_contains "$launch" "FM_PI_HARNESS=$harness $harness" \
+        "$harness $version worker launch must not re-resolve a bare executable in the worker"
+    done
+  done
+  pass "ordinary Pi/pi-signed worker launches carry session --approve when advertised"
+}
+
+test_pi_worker_launch_omits_unadvertised_approve() {
   local rec id out status launch
-  id=profile-pi-worker-no-approve-z8f
+  id=profile-pi-worker-no-approve-z8g
   rec=$(make_spawn_case profile-pi-worker-no-approve pi "$id")
   read_case_record "$rec"
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  out=$(FM_TEST_PI_VERSION=0.50.0 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
-  expect_code 0 "$status" "pi ship spawn should succeed"
+  expect_code 0 "$status" "pi without --approve must still spawn the worker"
   launch=$(fm_test_launch_unframe "$(cat "$LAUNCH_LOG")")
-  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --tui-mode regular" \
-    "pi worker launch lost its regular TUI probe"
+  assert_contains "$launch" "'$FAKEBIN_DIR/pi'" \
+    "pi without --approve must still launch the probed executable"
   assert_not_contains "$launch" "--approve" \
-    "ordinary Pi worker launches must not receive secondmate seeded-home --approve"
-  pass "ordinary Pi worker launches omit --approve"
+    "a failed or unadvertised --approve probe must omit the flag and never abort or downgrade the spawn"
+  assert_not_contains "$launch" "--tui-mode" \
+    "the 0.50.0 probe fixture omits --tui-mode too"
+  pass "Pi worker launch stays intact without an advertised --approve flag"
 }
 
 test_pi_approve_probe_omits_unsupported_flag() {
@@ -2855,7 +2882,8 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
 test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity
 test_pi_seeded_secondmate_preapproves_project_trust
-test_pi_worker_launch_omits_seeded_home_approve
+test_pi_worker_launch_preapproves_project_trust_when_advertised
+test_pi_worker_launch_omits_unadvertised_approve
 test_pi_approve_probe_omits_unsupported_flag
 test_pi_exclude_tools_reach_ship_and_scout_launches
 test_pi_exclude_tools_worker_registry_reports

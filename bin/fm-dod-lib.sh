@@ -429,6 +429,10 @@ EOF
 # skipped and the drive call never reports a green PR.
 fm_nm_driving_block() {  # <forge|no-ci>
   local pr_return_line='' pr_reattach_clause=';' drive_block wait_cfg
+  # The elapsed-hold prohibition names the configured pause verb; this block
+  # also renders from fm-promote.sh without fm-classify-lib.sh loaded, so
+  # resolve it defensively rather than assuming the sourcing script.
+  local paused_verb=${FM_CLASSIFY_PAUSED_VERB:-${FM_CLASSIFY_PAUSED_VERB_DEFAULT:-paused}}
   if [ "$1" != gerrit ] && [ "$1" != no-ci ]; then
     pr_return_line="Only a drive call's return reports the green PR: \`no-mistakes axi status\` shows progress but never reports \`checks-passed\` while the ci step is still monitoring the PR for merge, so never wait on a status poll for the next gate or outcome.
 "
@@ -442,13 +446,15 @@ fm_nm_driving_block() {  # <forge|no-ci>
 It bounds its own hold for you: \`--wait\` (default 8m) exists precisely so a harness with a ten-minute command cap gets a structured return instead of being killed mid-hold.
 Declare that wait using the brief's status-reporting rule before the foreground drive call.
 Never background a wait, and never arm a timer to stand in for one: a backgrounded call returns in milliseconds, so it does not wait at all, and every timer left behind fires later as a paid wake for nothing.
-${pr_return_line}Whenever a drive call returns without a gate or an outcome - its own wait elapsed, or it was killed or timed out - that is not a failure: reattach at once by re-running \`no-mistakes axi run\` without flags, and issue the same foreground call again, one at a time, until a gate or outcome comes back${pr_reattach_clause} if it refuses because no run is active, read the finished outcome from \`no-mistakes axi status\`."
+${pr_return_line}Whenever a drive call returns without a gate or an outcome - elapsed hold, timeout, or kill - that is not a failure and not a stopping point: reattach at once by re-running \`no-mistakes axi run\` without flags, issue the same foreground call again, one at a time, and keep running that loop until a gate or outcome comes back${pr_reattach_clause} if it refuses because no run is active, read the finished outcome from \`no-mistakes axi status\`.
+Never declare \`$paused_verb\` on an elapsed hold and never end the turn on one: the declaration the reporting rule already made covers every reissue of this loop, so the reattached call is that same wait continuing - not a new wait, not a phase change, never a reason to stop and wait for a steer."
   else
     drive_block="One drive call blocks until the next gate or outcome, which routinely outlives what your harness lets a single command run: Claude Code kills a command at ten minutes maximum, while one fix round is capped around thirty minutes and up to three rounds chain.
 So background the drive call instead of sitting in one blocking hold your harness will kill, and read its return when it finishes.
 Declare that wait using the brief's status-reporting rule before waiting on the backgrounded drive call.
 Where a harness's own command limit is not established, assume it bounds commands and use that same backgrounded shape.
-${pr_return_line}Whenever a drive call returns without a gate or an outcome - its own wait elapsed, or it was killed or timed out - reattach at once by re-running \`no-mistakes axi run\` without flags, backgrounded the same way${pr_reattach_clause} if it refuses because no run is active, read the finished outcome from \`no-mistakes axi status\`."
+${pr_return_line}Whenever a drive call returns without a gate or an outcome - elapsed hold, timeout, or kill - that is not a failure and not a stopping point: reattach at once by re-running \`no-mistakes axi run\` without flags, backgrounded the same way, and keep reissuing that exact call in a loop until a gate or outcome comes back${pr_reattach_clause} if it refuses because no run is active, read the finished outcome from \`no-mistakes axi status\`.
+Never declare \`$paused_verb\` on an elapsed hold and never end the turn on one: the declaration the reporting rule already made covers every reissue of this loop, so the reattached call is that same wait continuing - not a new wait, not a phase change, never a reason to stop and wait for a steer."
   fi
   cat <<EOF
 You drive no-mistakes by responding to its gates, not by implementing fixes.

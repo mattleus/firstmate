@@ -15,8 +15,10 @@
 # `## Captain's intent` preserved from the scout brief and promotion's ship-time
 # instructions under `## Firstmate spec`; the scout-time spec remains context but
 # is not relabeled as the ship spec. Promotion refuses leftover `{TASK}` /
-# `{FIRSTMATE_SPEC}` placeholders and a `## Captain's intent` line opening with
-# a Captain label or address (bin/fm-dod-lib.sh). A pre-subsection scout
+# `{FIRSTMATE_SPEC}` placeholders, a `## Captain's intent` line opening with
+# a Captain label or address, and on no-mistakes an intent naming internal
+# vocabulary (fm_brief_intent_sanitize: the pipeline replays the fill verbatim
+# into the pull-request body). A pre-subsection scout
 # brief contributes only Task lines explicitly marked as captain words to intent,
 # read outside fenced blocks and indented examples so a quoted `Captain:` sample
 # never passes the provenance gate as the ask (bin/fm-dod-lib.sh).
@@ -303,6 +305,9 @@ fi
 if [ -z "$(printf '%s' "$INTENT_BODY" | tr -d '[:space:]')" ]; then
   echo "error: $SCOUT_BRIEF has no provenance-marked Captain's intent; add the captain's actual words before promotion" >&2
   exit 1
+fi
+if [ "$MODE" = no-mistakes ]; then
+  fm_brief_intent_sanitize "$INTENT_BODY" "bin/fm-promote.sh: $SCOUT_BRIEF" || exit 1
 fi
 
 # The promoted worker must receive the same delivery contract an ordinary ship

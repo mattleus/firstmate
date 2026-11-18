@@ -1164,6 +1164,101 @@ EOF
   pass "fm-spawn/fm-promote: leftover Task placeholders are refused until both subsections are filled"
 }
 
+# Internal vocabulary in the filled no-mistakes intent replays verbatim into the
+# public pull-request body the pipeline's PR step publishes, so the launch-brief
+# render refuses with the offending terms named, and a clean refilling gets
+# past the same gate. Whole-token matching is pinned in tests/fm-dod-lib.test.sh.
+test_spawn_refuses_no_mistakes_intent_with_internal_vocabulary() {
+  local rec home proj fakebin id out status
+  rec=$(make_home intent-vocab)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+
+  id="intent-vocab-ship"
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "the vocabulary ship brief should scaffold"
+  fill_brief_subsections "$home/data/$id/brief.md" \
+    "The captain asked firstmate to supervise the crewmate spawn of the fix." \
+    "Wire the requested uploader error page."
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a no-mistakes intent with internal vocabulary should refuse"
+  assert_contains "$out" "internal vocabulary" "the refusal did not explain the intent ban"
+  for term in captain firstmate crewmate spawn supervise; do
+    assert_contains "$out" "$term" "the refusal did not name $term"
+  done
+  assert_absent "$home/state/$id.meta" "the refused vocabulary spawn wrote task metadata"
+  assert_absent "$home/data/$id/launch-brief.md" "the refused vocabulary spawn still rendered the launch brief"
+
+  id="intent-vocab-clean"
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "the reworded brief should scaffold"
+  fill_brief_subsections "$home/data/$id/brief.md" \
+    "Show a clearer failure page on the report uploader and document the retry flag." \
+    "Wire the requested uploader error page."
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "the reworded spawn should still fail at the refusing backend"
+  assert_not_contains "$out" "internal vocabulary" "the reworded intent was still refused"
+  assert_present "$home/data/$id/launch-brief.md" "the reworded spawn never rendered the launch brief"
+  pass "fm-spawn: a no-mistakes intent with internal vocabulary refuses the launch"
+}
+
+# Promotion renders the ask a no-mistakes worker passes as --intent, which the
+# pipeline's PR step publishes, so a no-mistakes render with internal vocabulary
+# stops with the terms named. Direct-PR mints no --intent, so the same ask there
+# keeps the existing ask checks only.
+test_promote_refuses_no_mistakes_intent_with_internal_vocabulary() {
+  local home meta id out status
+  home="$TMP_ROOT/promote-vocab/home"
+  mkdir -p "$home/state"
+  id=promote-vocab-d1
+  meta="$home/state/$id.meta"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+  mkdir -p "$home/data/$id"
+  cat > "$home/data/$id/brief.md" <<'EOF'
+You are a crewmate.
+
+# Task
+## Captain's intent
+The captain asked firstmate to supervise this brief's spawn of the fix crew.
+
+## Firstmate spec
+Wire the requested uploader error page.
+
+# Definition of done
+Delivery contract: mode=no-mistakes
+EOF
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode no-mistakes --yolo on 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a no-mistakes promotion with internal vocabulary should refuse"
+  assert_contains "$out" "internal vocabulary" "the promotion refusal did not explain the intent ban"
+  for term in captain firstmate supervise brief spawn; do
+    assert_contains "$out" "$term" "the promotion refusal did not name $term"
+  done
+  assert_grep 'kind=scout' "$meta" "the refused vocabulary promotion changed the task record"
+  assert_no_regex '^mode=' "$meta" "the refused vocabulary promotion recorded a delivery mode"
+
+  cat > "$home/data/$id/brief.md" <<'EOF'
+You are a crewmate.
+
+# Task
+## Captain's intent
+The supervisor approved a nicer uploader failure page and a documented retry flag.
+
+## Firstmate spec
+Wire the requested uploader error page.
+
+# Definition of done
+Delivery contract: mode=direct-PR
+EOF
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode direct-PR --yolo on 2>&1)
+  status=$?
+  expect_code 0 "$status" "a direct-PR promotion should not consult the --intent vocabulary gate"
+  pass "fm-promote: a no-mistakes intent with internal vocabulary stops the promotion"
+}
+
 # Exercise the serialized input a worker is told to pass to no-mistakes, not
 # just the presence of words somewhere in its much larger launch brief.
 # No live model or pipeline is needed: spawn publishes this exact input before
@@ -1184,16 +1279,34 @@ EOF
   authorized=$(awk '$0 == "## Captain intent authorized for --intent" { emit=1; next } emit { print }' "$home/data/$id/launch-brief.md")
   [ "$authorized" = "$words" ] || fail "authorized --intent must contain exactly the request, without headings, address, or contract prose: $authorized"
 
-  # The request itself may discuss an address spelling. It is data, not an
-  # invitation to scrub the user's words or synthesize a different request.
-  words=$(printf '%s\n' "Keep the literal example \`Captain, hello\` in the documentation." \
-    "Stop composing Captain:, Captain's words:, Captain's ask:, and Captain's intent: into PR bodies.")
+  # The request itself may discuss form words mid-line. They are data, not an
+  # address to act on and not a call to scrub the fill; the facts pass through
+  # exactly, and no banned internal word is present, so the render proceeds.
+  words=$(printf '%s\n' "Keep the literal example \`Ahoy, there\` in the documentation." \
+    "Stop composing Ahoy: and Ahoy's words: into PR bodies mid-sentence.")
   write_brief "$home" intent-literal no-mistakes
   printf '# Task\n## Captain'"'"'s intent\n%s\n\n## Firstmate spec\nDo not paraphrase.\n\n# Definition of done\nDelivery contract: mode=no-mistakes\n' "$words" > "$home/data/intent-literal/brief.md"
   out=$(run_spawn "$home" "$fakebin" intent-literal "$proj" claude --mode no-mistakes --yolo off)
   assert_not_contains "$out" "operator-address line" "labels mentioned mid-line were refused as address"
   authorized=$(awk '$0 == "## Captain intent authorized for --intent" { emit=1; next } emit { print }' "$home/data/intent-literal/launch-brief.md")
   [ "$authorized" = "$words" ] || fail "literal words in the request were scrubbed"
+
+  # A mid-line mention of the label itself carries the banned internal word, so
+  # the launch render refuses with the term named and never rewrites the fill:
+  # the gate stops, it never scrubs.
+  vocab_words=$(printf '%s\n' "Keep the literal example \`Captain, hello\` in the documentation." \
+    "Stop composing Captain:, Captain's words:, Captain's ask:, and Captain's intent: into PR bodies.")
+  write_brief "$home" intent-label-vocab no-mistakes
+  printf '# Task\n## Captain'"'"'s intent\n%s\n\n## Firstmate spec\nDo not paraphrase.\n\n# Definition of done\nDelivery contract: mode=no-mistakes\n' "$vocab_words" > "$home/data/intent-label-vocab/brief.md"
+  out=$(run_spawn "$home" "$fakebin" intent-label-vocab "$proj" claude --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a mid-line ban-word mention should refuse the launch"
+  assert_not_contains "$out" "operator-address line" "the vocabulary gate turned into an address refusal"
+  assert_contains "$out" "internal vocabulary" "label-vocab refusal did not explain the intent ban"
+  assert_contains "$out" "captain" "label-vocab refusal did not name the banned word"
+  assert_absent "$home/data/intent-label-vocab/launch-brief.md" "label-vocab spawn still rendered the launch brief"
+  assert_absent "$home/state/intent-label-vocab.meta" "label-vocab spawn wrote task metadata"
+  assert_grep 'Captain:' "$home/data/intent-label-vocab/brief.md" "the refusal rewrote the brief instead of stopping"
 
   # A body line that opens with operator address is refused, never rewritten.
   for marker in 'Captain:' "Captain's words:" "Captain's ask:" "Captain's intent:" 'Captain,'; do
@@ -2005,5 +2118,7 @@ test_pr_manual_is_refused_where_it_cannot_apply
 test_spawn_requires_the_brief_to_carry_the_registered_pr_text
 test_promotion_carries_the_pr_text_binding
 test_spawn_and_promote_require_filled_task_subsections
+test_spawn_refuses_no_mistakes_intent_with_internal_vocabulary
+test_promote_refuses_no_mistakes_intent_with_internal_vocabulary
 test_project_mode_resolves_branch_prefix
 echo "# all fm-task-delivery tests passed"

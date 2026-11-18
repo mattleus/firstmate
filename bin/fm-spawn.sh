@@ -28,8 +28,10 @@
 #   registry entry the parser refuses stops the spawn rather than launching on a
 #   guessed posture. A
 #   ship or scout spawn also refuses leftover `{TASK}` / `{FIRSTMATE_SPEC}`
-#   placeholders, an empty Task, an incomplete pair of Task subsections, or a
-#   `## Captain's intent` line opening with a Captain label or address.
+#   placeholders, an empty Task, an incomplete pair of Task subsections, a
+#   `## Captain's intent` line opening with a Captain label or address, and a
+#   no-mistakes intent naming internal vocabulary the pull-request body would
+#   replay (fm_brief_intent_sanitize; the pipeline passes the fill verbatim).
 #   When config/herdr-lifecycle-spawn-guard exists, a brief naming
 #   bin/fm-herdr-lab.sh or a listed Herdr session/server lifecycle command must
 #   carry the Herdr isolation contract emitted by bin/fm-brief.sh --herdr-lab;
@@ -4260,6 +4262,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
         exit 1
       fi
     fi
+    fm_brief_intent_sanitize "$CAPTAIN_INTENT" "bin/fm-spawn.sh: $BRIEF" || exit 1
   fi
   if [ "$RELAUNCH" -eq 1 ]; then
     BASE_BRANCH=$(fm_meta_get "$RELAUNCH_META" base_branch)

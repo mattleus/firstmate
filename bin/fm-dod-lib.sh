@@ -112,8 +112,11 @@
 # bin/fm-brief.sh scaffolds those two `# Task` subsections; bin/fm-spawn.sh and
 # bin/fm-promote.sh refuse leftover `{TASK}` / `{FIRSTMATE_SPEC}` placeholders
 # and a `## Captain's intent` line opening with a Captain label or address
-# through the helpers below. Other mentions of `--intent` point here rather than
-# restating the rule.
+# through the helpers below. The no-mistakes launch-brief and promotion renders
+# also refuse an intent naming internal vocabulary through
+# fm_brief_intent_sanitize, because the pipeline's pr step replays the passed
+# `--intent` verbatim into the public pull-request body. Other mentions of
+# `--intent` point here rather than restating the rule.
 # Every heredoc here stays outside a command substitution: `VAR=$(cat <<EOF ...)`
 # breaks parsing of the whole file on Bash 3.2 (tests/fm-brief.test.sh).
 # fm_brief_worker_role owns the ship/scout role scope. bin/fm-spawn.sh is its one
@@ -403,6 +406,46 @@ fm_brief_intent_address_line() {  # <file>
     /^[[:space:]]*(Captain('\''s (words|ask|intent))?:|Captain,)/ { print; found = 1; exit }
     END { exit !found }
   '
+}
+
+# The internal-vocabulary gate on the string a no-mistakes worker passes as
+# `--intent`, which the pipeline's pr step replays verbatim into the public
+# pull-request body. The banned list and the matching rule are owned by this one
+# gate: case-insensitive, and a term matches only as its own alphanumeric token,
+# so possessives and hyphen compounds count while unrelated words such as
+# "briefly" do not. The shells that render the string into worker-facing briefs
+# (the launch-brief render in bin/fm-spawn.sh and a promotion render in
+# bin/fm-promote.sh) refuse through here; the scaffold cannot, because it never
+# sees the filled text. Terms are returned once each in the gate's canonical
+# order, so the refusal names the same set regardless of how often each term
+# appears.
+fm_brief_intent_sanitize() {  # <intent-text> <caller>
+  local text=$1 caller=${2:-fm_brief_intent_sanitize} terms
+  terms=$(printf '%s\n' "$text" | awk '
+    BEGIN {
+      words = "captain captains firstmate firstmates crewmate crewmates brief briefs briefed briefing spawn spawns spawned spawning supervise supervises supervised supervising supervisor supervisors supervision supervisions fleet fleets"
+      count = split(words, banned, " ")
+      for (i = 1; i <= count; i++) banned[banned[i]] = 1
+    }
+    {
+      line = tolower($0)
+      gsub(/[^[:alnum:]]+/, " ", line)
+      tokens = split(line, token, " ")
+      for (i = 1; i <= tokens; i++)
+        if (token[i] in banned && !(token[i] in found)) found[token[i]] = 1
+    }
+    END {
+      hits = ""
+      for (i = 1; i <= count; i++)
+        if (banned[i] in found) hits = hits (hits == "" ? "" : ", ") banned[i]
+      if (hits == "") exit 0
+      print hits
+      exit 1
+    }
+  ')
+  [ -n "$terms" ] || return 0
+  echo "error: $caller: the filled captain intent contains internal vocabulary: $terms; the no-mistakes pipeline passes this fill verbatim as --intent and the pipeline's PR step publishes it into the public pull-request body, so reword it in the project's public language before launching" >&2
+  return 1
 }
 
 # The `nm-<run>-<step>` decision key this block mandates is load-bearing beyond

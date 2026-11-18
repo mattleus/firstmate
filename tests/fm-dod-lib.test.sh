@@ -469,6 +469,90 @@ test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
 test_promotion_keeps_the_recorded_base_branch
 
+# The no-mistakes `--intent` string replays verbatim into the pipeline's public
+# pull-request body, so the whole fill must pass fm_brief_intent_sanitize before
+# any launch-brief or promotion render. These tests pin the gate's own contract:
+# public language passes, every banned term is caught, whole-token matching
+# keeps public words that merely contain a banned substring clean, and matching
+# is case-insensitive.
+test_intent_sanitize_accepts_public_language() {
+  local out rc
+  out=$(fm_brief_intent_sanitize "Make the report uploader show a clearer failure page and document the retry flag." gate)
+  rc=$?
+  expect_code 0 "$rc" "a clean intent should pass"
+  [ -z "$out" ] || fail "a clean intent should not produce output (got: $out)"
+  pass "intent sanitize: a clean intent passes"
+}
+
+test_intent_sanitize_catches_every_banned_term() {
+  local term out rc n=0
+  while read -r term; do
+    [ -n "$term" ] || continue
+    n=$((n + 1))
+    out=$(fm_brief_intent_sanitize "Please ship the $term and document its flag." gate 2>&1)
+    rc=$?
+    expect_code 1 "$rc" "the banned term '$term' should be refused"
+    assert_contains "$out" "$term" "the refusal did not name '$term'"
+  done <<'ROWS'
+captain
+firstmate
+crewmate
+brief
+spawn
+supervision
+fleet
+crewmates
+briefed
+spawns
+captains
+firstmates
+briefs
+briefing
+spawned
+spawning
+supervisor
+supervisors
+supervise
+supervises
+supervised
+supervising
+supervisions
+fleets
+ROWS
+  [ "$n" -gt 20 ] || fail "the banned-term corpus lost rows: only $n iterated"
+  pass "intent sanitize: every banned term is caught"
+}
+
+test_intent_sanitize_spares_whole_token_neighbors() {
+  local out rc
+  out=$(fm_brief_intent_sanitize "Running briefly under a supervisory daemon after a despawn is fleeting." gate)
+  rc=$?
+  expect_code 0 "$rc" "substring neighbors of banned words were flagged"
+  [ -z "$out" ] || fail "substring neighbors should be clean (got: $out)"
+  pass "intent sanitize: whole-token matching spares briefly and neighbors"
+}
+
+test_intent_sanitize_is_case_insensitive() {
+  local out rc
+  out=$(fm_brief_intent_sanitize "The CAPTAIN approved the Crewmate's next BRiefed plan." gate 2>&1)
+  rc=$?
+  expect_code 1 "$rc" "mixed-case banned words should be refused"
+  assert_contains "$out" "captain" "the refusal did not name captain"
+  assert_contains "$out" "crewmate" "the refusal did not name crewmate (possessive)"
+  assert_contains "$out" "briefed" "the refusal did not name briefed"
+  pass "intent sanitize: matching is case-insensitive and possessives count"
+}
+
+test_intent_sanitize_lists_each_term_once_in_canonical_order() {
+  local out rc terms
+  out=$(fm_brief_intent_sanitize "The captain spoke to firstmate, then CAPTAIN told the fleet it was spawned, captain." gate 2>&1)
+  rc=$?
+  expect_code 1 "$rc" "a multi-term intent should be refused"
+  terms=$(printf '%s\n' "$out" | sed -n 's/^error: gate: .*vocabulary: //; s/; .*//p')
+  [ "$terms" = "captain, firstmate, spawned, fleet" ] || fail "the refusal listed wrong terms: $terms"
+  pass "intent sanitize: each offending term is listed once in canonical order"
+}
+
 # The launch role is the generated text a worker receives. It must keep the
 # skill name, so a session that registers the skill loads it by name, and must
 # name the skill file as the fallback for a session where the name does not
@@ -596,6 +680,12 @@ test_external_rule_one_forbids_every_task_push
 test_external_dod_renders_the_adapter
 test_external_review_done_without_backup_is_accepted_on_the_url
 test_external_review_done_with_backup_needs_the_copy
+
+test_intent_sanitize_accepts_public_language
+test_intent_sanitize_catches_every_banned_term
+test_intent_sanitize_spares_whole_token_neighbors
+test_intent_sanitize_is_case_insensitive
+test_intent_sanitize_lists_each_term_once_in_canonical_order
 
 test_worker_role_names_skill_and_fallback_file
 

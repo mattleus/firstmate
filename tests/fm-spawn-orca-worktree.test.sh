@@ -159,7 +159,7 @@ test_orca_fresh_spawn_enters_the_worktree_it_created() {
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
-Exercise an Orca-backed spawn for $id.
+Exercise an Orca-backed launch for $id.
 
 ## Firstmate spec
 Confirm the launch enters the worktree Orca created for it.
@@ -397,7 +397,7 @@ test_orca_spawn_waits_for_a_slow_pane_before_a_later_failure() {
   cat > "$home/data/$id/brief.md" <<EOF
 # Task
 ## Captain's intent
-Exercise a failed Orca spawn after launch delivery.
+Exercise a failed Orca launch after delivery.
 
 ## Firstmate spec
 Confirm a slow pane still receives the staged launch file before the spawn fails later.

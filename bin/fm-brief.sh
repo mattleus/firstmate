@@ -153,6 +153,22 @@
 # regular file, or text carrying its own "Delivery contract: mode=" line (which
 # a later scout promotion could not outrank), stops the scaffold before
 # anything is written. Secondmate charters never take it.
+# Per-project constraints give a project's standing engineering rules a home
+# where they always bind worker intent and the no-mistakes pipeline: with
+# config/project-constraints/<project>.txt present under the active home
+# (project names the repo this scaffold receives; the file is local and
+# gitignored with the rest of config/), the scaffold reads its contents before
+# anything is written and splices them verbatim as their own paragraph directly
+# after the `{TASK}` placeholder inside `## Captain's intent`. Filling the task
+# therefore leaves the constraints inside the intent body that bin/fm-spawn.sh
+# turns into the pipeline `--intent` and every reviewer treats as acceptance
+# criteria, whether the brief is a first dispatch or a promoted scout. An absent
+# or blank file changes nothing; a present path that is not a readable regular
+# file stops the scaffold before anything is written, and so does prose carrying
+# a line that begins with `#`, which would read as a new heading inside the
+# intent section. The text is static and never executed or expanded, and
+# secondmate charters never take it; the file convention is documented in
+# docs/configuration.md.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -605,6 +621,37 @@ fi
 
 REPO=${POS[1]}
 
+# The per-project constraints file is read before anything is written,
+# mirroring the brief-include read, so an unusable file never leaves a partial
+# scaffold behind. This point is reached only for ship and scout scaffolds -
+# the secondmate charter branch above exits - so every read here belongs to a
+# project brief.
+PROJECT_CONSTRAINTS=
+CONSTRAINTS_FILE="$CONFIG/project-constraints/$REPO.txt"
+if [ -e "$CONSTRAINTS_FILE" ] || [ -L "$CONSTRAINTS_FILE" ]; then
+  { [ -f "$CONSTRAINTS_FILE" ] && PROJECT_CONSTRAINTS=$(cat "$CONSTRAINTS_FILE" 2>/dev/null); } || {
+    echo "error: $CONSTRAINTS_FILE must be a readable regular file" >&2
+    exit 1
+  }
+  # Normalize the paragraph edges without touching interior lines: leading and
+  # trailing blank lines drop, and an all-blank file empties, so a present but
+  # blank constraints file changes the brief not at all.
+  PROJECT_CONSTRAINTS=$(printf '%s\n' "$PROJECT_CONSTRAINTS" | awk '
+    { lines[NR] = $0 }
+    END {
+      first = 1
+      last = NR
+      while (first <= last && lines[first] ~ /^[[:space:]]*$/) first++
+      while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print lines[i]
+    }
+  ')
+  if [ -n "$PROJECT_CONSTRAINTS" ] && printf '%s\n' "$PROJECT_CONSTRAINTS" | grep -q '^#'; then
+    echo "error: $CONSTRAINTS_FILE must hold plain engineering prose with no '#' heading line, which would read as a new heading inside the Captain's intent section the text is injected into" >&2
+    exit 1
+  fi
+fi
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -650,6 +697,18 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 {FIRSTMATE_SPEC}
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+
+# Constraints are spliced as their own paragraph directly after the {TASK}
+# placeholder, so a filled task leaves the constraints inside the Captain's
+# intent body that bin/fm-spawn.sh extracts for the no-mistakes --intent. The
+# split is plain parameter expansion on the template's single {TASK}
+# occurrence, which inserts the constraints bytes verbatim - never re-scanned,
+# executed, or expanded - instead of passing them through a shell evaluation.
+if [ -n "$PROJECT_CONSTRAINTS" ]; then
+  TASK_BEFORE=${TASK_SECTION%%"{TASK}"*}
+  TASK_AFTER=${TASK_SECTION#*"{TASK}"}
+  TASK_SECTION="$TASK_BEFORE"'{TASK}'$'\n\n'"$PROJECT_CONSTRAINTS$TASK_AFTER"
+fi
 
 # One shared string keeps the ship and scout infrastructure rule identical.
 # Rule 2 governs file edits, so it does not prohibit pool administration.

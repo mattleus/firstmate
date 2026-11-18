@@ -141,6 +141,17 @@ SH
 printf 'host=%s\n' "${GH_HOST:-}" >> "$FM_TEST_GH_LOG"
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
+  "pr diff")
+    case " $* " in
+      *" --name-only "*)
+        # FM_TEST_GH_CHANGED_FILES is a newline-separated changed-file fixture;
+        # the unquoted expansion splits it into one path argument per line.
+        [ "${FM_TEST_GH_DIFF_RC:-0}" = 0 ] || exit "${FM_TEST_GH_DIFF_RC}"
+        printf '%s\n' ${FM_TEST_GH_CHANGED_FILES:-}
+        exit 0
+        ;;
+    esac
+    ;;
   "api graphql")
     case "$*" in
       *reviewThreads*)
@@ -800,6 +811,196 @@ test_unresolved_bot_review_threads_refuse_registration() {
     || fail "a non-JSON thread report was not recorded"
 
   pass "registration refuses unresolved bot review threads, naming count and bots, and passes resolved, human, unreadable, and merge-time ones"
+}
+
+# A project's banned-pattern contract is enforced at registration itself: with
+# config/project-constraints/<project>.banned-patterns present, registration
+# fetches the PR's changed files and refuses any match before recording or
+# arming anything. The pattern file is skipped completely without a fetch when
+# the project declares none, comments and blank lines never ban anything, a
+# read failure refuses rather than registering unverified content, and other
+# providers refuse while a contract exists because no configured CLI there can
+# attest a changed-file list.
+write_banned_patterns() {  # <dir> <file-body>; <project> fixture name is "project"
+  mkdir -p "$1/home/config/project-constraints"
+  printf '%s\n' "$2" > "$1/home/config/project-constraints/project.banned-patterns"
+}
+
+test_banned_pattern_gates_registration() {
+  local dir state rc
+
+  # A matching changed file refuses with the path and the pattern, recording
+  # and arming nothing, through the gh diff read the check owns.
+  dir=$(make_case banned-refused)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" '# generated pipeline artifacts
+*.tftest.hcl'
+  set +e
+  FM_TEST_GH_CHANGED_FILES=$'infra/main.tf\ninfra/harness.tftest.hcl\nREADME.md' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a banned changed file was registered"
+  grep -qF 'infra/harness.tftest.hcl' "$dir/stderr" || fail "the refusal did not name the changed file: $(cat "$dir/stderr")"
+  grep -qF '*.tftest.hcl' "$dir/stderr" || fail "the refusal did not name the pattern"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "a refused registration recorded pr="
+  [ ! -e "$state/task-a.check.sh" ] || fail "a refused registration armed a poll"
+  [ ! -e "$state/task-a.pr-poll" ] || fail "a refused registration wrote a poll sidecar"
+  grep -qF 'pr diff --name-only' "$dir/gh.log" || fail "the changed-file list was not read from the forge"
+
+  # A non-matching file set registers normally: .bak suffix differs, and the
+  # pattern only reaches a path the glob actually ends with.
+  dir=$(make_case banned-cleared)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" '*.tftest.hcl'
+  FM_TEST_GH_CHANGED_FILES=$'infra/main.tf\ninfra/harness.tftest.hcl.bak' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "a non-matching changed file set was refused: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$state/task-a.meta" \
+    || fail "a clean file set was not recorded"
+  [ -f "$state/task-a.check.sh" ] || fail "a clean file set was not armed"
+
+  # An anchored pattern stays under its directory: a root README.md passes the
+  # infra/-scoped contract, and a nested notes.md matching through the slash
+  # refuses.
+  dir=$(make_case banned-scoped-pass)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" 'infra/*.md'
+  FM_TEST_GH_CHANGED_FILES='README.md' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2> "$dir/stderr" \
+    || fail "a file outside the anchored prefix was refused: $(cat "$dir/stderr")"
+  grep -q '^pr=' "$state/task-a.meta" || fail "the scoped pass was not recorded"
+
+  dir=$(make_case banned-scoped-refused)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" 'infra/*.md'
+  set +e
+  FM_TEST_GH_CHANGED_FILES=$'README.md\ninfra/notes.md' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > /dev/null 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an anchored pattern did not reach a nested file"
+  grep -qF 'infra/notes.md' "$dir/stderr" || fail "the scoped refusal did not name the nested path"
+
+  # A present-but-unusable pattern file refuses rather than guessing, and a
+  # comments-only file bans nothing.
+  dir=$(make_case banned-unreadable)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" '*.tftest.hcl'
+  rm -f "$dir/home/config/project-constraints/project.banned-patterns"
+  mkdir "$dir/home/config/project-constraints/project.banned-patterns"
+  printf 'keep
+' > "$dir/home/config/project-constraints/project.banned-patterns/inner"
+  set +e
+  FM_TEST_GH_CHANGED_FILES='README.md' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unreadable pattern file registered silently"
+  grep -qF 'readable regular file' "$dir/stderr" || fail "the unreadable-pattern refusal did not name the file"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "an unreadable pattern file recorded pr="
+
+  dir=$(make_case banned-comments-only)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" '# no bans yet
+'
+  FM_TEST_GH_CHANGED_FILES=$'scratch.tftest.hcl' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2> "$dir/stderr" \
+    || fail "a comments-only pattern file was not a no-op: $(cat "$dir/stderr")"
+
+  # A failed forge read refuses rather than registering content nobody
+  # verified, and a project without a contract is never fetched at all.
+  dir=$(make_case banned-diff-fails)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" '*.tftest.hcl'
+  set +e
+  FM_TEST_GH_DIFF_RC=1 FM_TEST_GH_CHANGED_FILES=$'infra/main.tf' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a failed changed-file read registered"
+  grep -qF 'failed' "$dir/stderr" || fail "the failed-read refusal did not say why"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "a failed read recorded pr="
+
+  dir=$(make_case banned-no-contract)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  FM_TEST_GH_CHANGED_FILES=$'scratch.tftest.hcl' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2> "$dir/stderr" \
+    || fail "a project without a contract was refused: $(cat "$dir/stderr")"
+  ! grep -qF 'pr diff --name-only' "$dir/gh.log" \
+    || fail "a project without a contract fetched its changed files"
+
+  # The merge-time re-record bin/fm-pr-merge.sh performs runs the same gate, so
+  # commits landing after arming cannot slip a banned file into a merge.
+  dir=$(make_case banned-merge-time)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  write_banned_patterns "$dir" '*.tftest.hcl'
+  set +e
+  FM_PR_CHECK_MERGE=1 FM_TEST_GH_CHANGED_FILES=$'scratch.tftest.hcl' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 >/dev/null 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the merge-time re-record skipped the banned-pattern gate"
+  grep -qF 'banned pattern' "$dir/stderr" || fail "the merge-time refusal lost its reason"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "a merge-time refusal recorded pr="
+
+  # A Gerrit-, GitLab-, or Forgejo-addressed registration refuses while a
+  # contract exists, because no CLI there can attest the changed-file list.
+  dir=$(make_case banned-gitlab)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-g
+  printf 'done [at=2]: PR https://gitlab.example/group/subgroup/project/-/merge_requests/7 checks green\n' > "$state/task-g.status"
+  write_banned_patterns "$dir" '*.tftest.hcl'
+  set +e
+  run_check_entry "$dir" task-g https://gitlab.example/group/subgroup/project/-/merge_requests/7 \
+    >/dev/null 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a gitlab registration bypassed a declared contract"
+  grep -qF 'can attest a changed-file list' "$dir/stderr" \
+    || fail "the gitlab refusal did not name the limitation: $(cat "$dir/stderr")"
+  ! grep -q '^pr=' "$state/task-g.meta" || fail "a gitlab refusal recorded pr="
+  pass "the banned-pattern contract refuses matching registrations on github and forks without one, before any state changes"
+}
+
+# The scan surfaces the refusal through its one-line report and keeps retrying
+# silently, so a worker's later clean push registers without help.
+test_banned_pattern_scan_reports_once_and_then_records() {
+  local dir state out first second
+  dir=$(make_case banned-scan)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  printf '%s\n' 'done [at=2]: PR https://github.com/o/r/pull/9 checks green' > "$state/task-a.status"
+  write_banned_patterns "$dir" '*.tftest.hcl'
+
+  out=$(FM_TEST_GH_CHANGED_FILES=$'infra/harness.tftest.hcl' run_check_entry "$dir" scan 2> "$dir/stderr") \
+    || fail "the scan failed: $(cat "$dir/stderr")"
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] || fail "a scan refusal printed more than its one line: $out"
+  case "$out" in
+    'task-a reported https://github.com/o/r/pull/9 in a done line, but it was not recorded: '*matches*banned*)
+      ;;
+    'task-a reported https://github.com/o/r/pull/9 in a done line, but it was not recorded: '*banned*match*)
+      ;;
+    *) fail "the scan refusal line lost the task, the PR, or the constraint reason: $out" ;;
+  esac
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "the scan recorded a banned changed file"
+
+  out=$(FM_TEST_GH_CHANGED_FILES=$'infra/harness.tftest.hcl' run_check_entry "$dir" scan 2> "$dir/stderr") \
+    || fail "the repeated scan failed: $(cat "$dir/stderr")"
+  [ -z "$out" ] || fail "the same banned-pattern refusal was reported twice: $out"
+
+  out=$(FM_TEST_GH_CHANGED_FILES=$'infra/main.tf' run_check_entry "$dir" scan 2> "$dir/stderr") \
+    || fail "the retry scan failed: $(cat "$dir/stderr")"
+  [ -z "$out" ] || fail "a clean retry printed: $out"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$state/task-a.meta" \
+    || fail "the PR was not recorded once its changed files were clean"
+  [ ! -e "$state/task-a.pr-register-refused" ] || fail "a recorded PR kept its refusal marker"
+  pass "the scan reports a banned-pattern refusal once, and records the PR when its later files are clean"
 }
 
 # A secondmate is a persistent worker, not a delivery lane: it never owns a
@@ -4276,3 +4477,7 @@ test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
 test_timed_out_custom_check_surfaces_with_partial_output
 test_teardown_removes_poll_artifacts
+
+# A banned-pattern contract enforced at registration (config/project-constraints/).
+test_banned_pattern_gates_registration
+test_banned_pattern_scan_reports_once_and_then_records

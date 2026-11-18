@@ -1810,6 +1810,21 @@ A malformed or unreadable file refuses every fresh ship or scout spawn until it 
 Firstmate cannot see which part of a worker's life uses the resource, so the number bounds whole workers from launch to handoff, and the tightest resource every worker needs should decide it.
 [`bin/fm-project-capacity-lib.sh`](../bin/fm-project-capacity-lib.sh) owns the file format, what holds a place, and why concurrent spawns cannot both take the last one.
 
+## Project constraints (config/project-constraints/)
+
+The optional local, gitignored `config/project-constraints/` directory holds a project's standing engineering rules, keyed by one file prefixed with the project's registered name, which is its clone directory name.
+`<project>.txt` contains plain engineering prose, and `bin/fm-brief.sh` injects that text as a paragraph directly after the `{TASK}` placeholder inside `## Captain's intent`, so the rules reach the worker and, on a no-mistakes task, the pipeline `--intent` built from that section.
+This is how a spec-level rule the captain keeps repeating (no disposable `.tftest.hcl` validation files, no generated fixtures committed) becomes a per-project standing constraint rather than text each brief asks the captain to retype.
+`<project>.banned-patterns` - one shell glob per line such as `*.tftest.hcl` - declares the file shapes a pull request for that project must not carry, and `bin/fm-pr-check.sh` refuses to register a pull request whose changed files match any pattern, so merge monitoring is never armed while one is present.
+Patterns match a changed file's full repository path where `*` also crosses `/`, so `*.tftest.hcl` matches at any depth and `infra/*.md` only under `infra/`, and blank lines and lines beginning with `#` are comments.
+None of this replaces the pipeline's own review or a project's lint rules; it puts the home's own engineering law where the brief and the PR registration can enforce it automatically.
+On GitHub the changed paths are read with `gh pr diff --name-only`; a Gerrit, GitLab, or Forgejo registration refuses while a patterns file exists because no configured CLI can attest the changed-file list, and a failed read refuses rather than registering content nobody verified, so a declared constraint is never silently skipped.
+The check runs at every registration, including the automatic scan and the merge-time re-record, so commits arriving after arming cannot slip a banned file into a merge.
+An absent or blank file changes nothing, and a present path that is not a readable regular file stops the scaffold or the registration with its reason instead of guessing.
+A constraints `.txt` must stay prose: a line beginning with `#` would read as a new heading inside the Captain's intent section, so the scaffold refuses it, and the injected text is never executed or expanded.
+The files are home-local and are not inherited into secondmate homes, so a secondmate domain sets its own constraints in its own home.
+`bin/fm-brief.sh`'s header owns the injection rule, and `bin/fm-pr-check.sh`'s header owns the registration refusal.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.

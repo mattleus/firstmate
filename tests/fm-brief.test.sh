@@ -1819,6 +1819,125 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   pass "fm-brief.sh: every crewmate scaffold forbids administering the shared worktree pool"
 }
 
+# Per-project constraints (config/project-constraints/<project>.txt) are the
+# place a project's engineering rules live so they always reach --intent: the
+# scaffold injects their prose as its own paragraph right after {TASK} inside
+# ## Captain's intent, without executing or expanding it, and refuses an
+# unusable file before any brief is written. A project with no file scaffolds
+# byte-for-byte as before, and only the named project's file applies.
+write_brief_constraints() {  # <home> <project> <body>
+  mkdir -p "$1/config/project-constraints"
+  printf '%s\n' "$3" > "$1/config/project-constraints/$2.txt"
+}
+
+PROJ_CONSTRAINTS_PROSE='This repository does not add .tftest.hcl files; any disposable validation harness must live outside the worktree and never be committed.'
+
+test_project_constraints_no_file_and_cross_project_leak() {
+  local home brief
+  home="$TMP_ROOT/constraints-absent-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-plain plain-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "a project with no constraints file must scaffold normally"
+  brief="$home/data/brief-constr-plain/brief.md"
+  assert_grep "{TASK}" "$brief" "a plain scaffold lost its {TASK} placeholder"
+  assert_no_grep ".tftest.hcl" "$brief" "a plain scaffold invented constraint text"
+
+  # A sibling project's file must not leak into a different project's scaffold,
+  # whichever side carries the file.
+  write_brief_constraints "$home" conjured-proj "$PROJ_CONSTRAINTS_PROSE"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-sibling plain-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "scaffolding another project with one constraints file elsewhere must still work"
+  assert_no_grep ".tftest.hcl" "$home/data/brief-constr-sibling/brief.md" \
+    "another project's constraints leaked into a plain scaffold"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-nofile bare-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "scaffolding a third project with no file must still work"
+  assert_no_grep ".tftest.hcl" "$home/data/brief-constr-nofile/brief.md" \
+    "constraints text leaked to a project with none"
+  pass "fm-brief.sh: no constraints file scaffolds normally and no sibling file leaks"
+}
+
+test_project_constraints_inject_after_task_placeholder() {
+  local home brief task_line prose_line spec_line intent_line margin
+  home="$TMP_ROOT/constraints-present-home"
+  mkdir -p "$home/data"
+  # Prose with apostrophes, backticks, and shell-notional tokens must land in
+  # the brief byte-identical: the text is never executed or expanded.
+  write_brief_constraints "$home" handled-proj "$PROJ_CONSTRAINTS_PROSE"
+  cat >> "$home/config/project-constraints/handled-proj.txt" <<'PROSE'
+It also keeps a repo's own prose tokens stable: `no-mistakes` $( and ${} 'cause "fleet law".
+PROSE
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-filled handled-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "a project with a constraints file must scaffold"
+  brief="$home/data/brief-constr-filled/brief.md"
+  assert_present "$brief" "the constraints scaffold was not written"
+  intent_line=$(grep -anF "## Captain's intent" "$brief" | head -1 | cut -d: -f1)
+  task_line=$(grep -anF '{TASK}' "$brief" | head -1 | cut -d: -f1)
+  prose_line=$(grep -anF '.tftest.hcl' "$brief" | head -1 | cut -d: -f1)
+  spec_line=$(grep -anF '## Firstmate spec' "$brief" | head -1 | cut -d: -f1)
+  [ -n "$intent_line" ] && [ -n "$task_line" ] && [ -n "$prose_line" ] && [ -n "$spec_line" ] \
+    || fail "a constraints brief lost an ordering anchor"
+  [ "$intent_line" -lt "$task_line" ] && [ "$task_line" -lt "$prose_line" ] && [ "$prose_line" -lt "$spec_line" ] \
+    || fail "the constraints paragraph did not land between {TASK} and ## Firstmate spec"
+  [ "$(grep -c -F '{TASK}' "$brief")" = 1 ] \
+    || fail "the injected constraints changed the documented {TASK} fill site count"
+  # shellcheck disable=SC2016 # The literal token must reach the brief unexpanded.
+  assert_grep '$( and ${}' "$brief" "constriant tokens were not kept byte-literal"
+  assert_grep "prose tokens stable" "$brief" "the second constraint line was dropped"
+  # Exactly one blank line separates {TASK} from the paragraph, and one closes
+  # it before the spec heading; a multi-line paragraph keeps its own lines.
+  margin=$(sed -n "$((prose_line - 1))p" "$brief")
+  [ -z "$margin" ] || fail "a blank line must separate {TASK} from the constraints paragraph"
+  margin=$(sed -n "$((spec_line - 1))p" "$brief")
+  [ -z "$margin" ] || fail "a blank line must close the constraints paragraph before ## Firstmate spec"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-scout handled-proj --scout >/dev/null 2>&1 \
+    || fail "a scout scaffold with constraints must work"
+  assert_grep ".tftest.hcl" "$home/data/brief-constr-scout/brief.md" "the scout scaffold lost the constraints"
+  # A secondmate charter is not a project brief and takes no constraints.
+  FM_SECONDMATE_CHARTER='Supervise the handled domain.' \
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-charter --secondmate handled-proj >/dev/null 2>&1 \
+    || fail "the charter scaffold must work"
+  assert_no_grep ".tftest.hcl" "$home/data/brief-constr-charter/brief.md" "the charter took constraints"
+  pass "fm-brief.sh: constraints prose is injected as a paragraph after {TASK} for ships and scouts, byte-literal"
+}
+
+test_project_constraints_blank_and_unusable_files() {
+  local home out rc brief
+  home="$TMP_ROOT/constraints-unusable-home"
+  mkdir -p "$home/data"
+  # A present but blank file is a no-op, like an absent one.
+  write_brief_constraints "$home" blank-proj '   '
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-blank blank-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "a blank constraints file must not stop the scaffold"
+  brief="$home/data/brief-constr-blank/brief.md"
+  assert_grep "{TASK}" "$brief" "a blank-file scaffold lost its {TASK} placeholder"
+
+  # An unusable file (here: a directory) stops the scaffold with its reason and
+  # leaves no brief behind.
+  rm -rf "$home/config/project-constraints"
+  mkdir -p "$home/config/project-constraints/bad-proj.txt"
+  printf 'keep\n' > "$home/config/project-constraints/bad-proj.txt/inner"
+  set +e
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-bad bad-proj --mode no-mistakes 2>&1); rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unusable constraints file was ignored"
+  assert_contains "$out" "readable regular file" "the unreadable-file refusal lost its reason"
+  assert_absent "$home/data/brief-constr-bad/brief.md" "the refused scaffold left a brief behind"
+
+  # A heading line would read as a new heading inside the Captain's intent
+  # section, so it is refused the same way, loudly.
+  rm -rf "$home/config/project-constraints/bad-proj.txt"
+  printf '%s\n' '# Strict rule' 'No .tftest.hcl files.' > "$home/config/project-constraints/bad-proj.txt"
+  set +e
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-constr-heading bad-proj --mode no-mistakes 2>&1); rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a heading line in constraints was accepted"
+  assert_contains "$out" "heading" "the heading refusal lost its reason"
+  assert_absent "$home/data/brief-constr-heading/brief.md" "the heading refusal left a brief behind"
+  pass "fm-brief.sh: blank constraints are a no-op and unusable constraint content stops the scaffold loudly"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1863,3 +1982,8 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+
+# Per-project constraints convention (config/project-constraints/).
+test_project_constraints_no_file_and_cross_project_leak
+test_project_constraints_inject_after_task_placeholder
+test_project_constraints_blank_and_unusable_files

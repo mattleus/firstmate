@@ -30,6 +30,22 @@
 # skips this refusal, because its own merge-time draft refusal is authoritative.
 # The recorded pr= also frees the task's place in a declared project capacity
 # (bin/fm-project-capacity-lib.sh).
+# A project that declares a banned-pattern contract enforces it at registration:
+# with config/project-constraints/<project>.banned-patterns present in the
+# active home - the project is the task's registered project directory name,
+# one shell glob per line, and blank lines and `#` lines are comments -
+# registration fetches the PR's changed file list and refuses, before anything
+# is recorded or armed, when any changed path matches a banned glob. Patterns
+# are shell globs matched against the full changed path, where `*` also crosses
+# `/`, so `*.tftest.hcl` matches at any depth and `infra/*.md` only under
+# infra/. GitHub reads the changed paths with `gh pr diff --name-only`; while a
+# contract exists, a Gerrit, GitLab, or Forgejo registration refuses because no
+# configured CLI can attest a changed-file list, and a failed read refuses
+# rather than registering content nobody verified, so a declared constraint is
+# never silently skipped. The check runs at every registration, including the
+# scan path and fm-pr-merge.sh's merge-time re-record, so commits arriving
+# after arming cannot slip a banned file into a merge. docs/configuration.md
+# owns the file convention itself.
 #
 # scan records every task whose status reports a PR that nobody recorded, so
 # merge monitoring never depends on the supervisor remembering this command.
@@ -99,6 +115,70 @@ pr_check_pr_retired() {  # <id> <recorded-url>
   [ -n "$2" ] && fm_pr_url_parse "$2" || return 1
   fm_pr_poll_merge_already_notified "$STATE" "$1" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" && return 0
   fm_pr_poll_retirement_parse "$STATE/$1.pr-poll-retirement" && [ "$FM_PR_RETIRE_URL" = "$2" ]
+}
+
+# The banned-pattern gate refuses a registration whose changed files match a
+# project's config/project-constraints/<project>.banned-patterns globs. It
+# stays read-only: the caller runs it before any metadata or poll sidecar
+# changes, and its every error lands on stderr as an `error:` line so the scan
+# surfaces the reason in its one refusal line.
+pr_check_banned_paths() {  # <provider> <project> <url>
+  local provider=$1 project=$2 url=$3
+  local name=${project##*/}
+  local patterns_file patterns pattern changed changes
+  [ -n "$name" ] || return 0
+  patterns_file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/project-constraints/$name.banned-patterns"
+  [ -e "$patterns_file" ] || [ -L "$patterns_file" ] || return 0
+  [ -f "$patterns_file" ] || {
+    echo "error: $patterns_file must be a readable regular file" >&2
+    return 1
+  }
+  patterns=$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
+    {
+      sub(/^[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+    }
+  ' "$patterns_file") || true
+  [ -n "$patterns" ] || return 0
+  case "$provider" in
+    github)
+      if ! command -v gh >/dev/null 2>&1; then
+        echo "error: reading the changed files of $url for the banned-pattern check requires gh on PATH" >&2
+        return 1
+      fi
+      changes=$(gh pr diff --name-only "$url" 2>&1) || {
+        echo "error: reading the changed files of $url for the banned-pattern check failed: $changes" >&2
+        return 1
+      }
+      ;;
+    gerrit|gitlab|forgejo)
+      echo "error: $patterns_file exists, but no configured $provider CLI can attest a changed-file list, so registering $url would bypass the banned-pattern contract silently; keep the contract on a github project or remove the patterns file" >&2
+      return 1
+      ;;
+    *)
+      echo "error: unknown forge provider $provider for the banned-pattern check" >&2
+      return 1 ;;
+  esac
+  # Patterns are plain shell globs matched against the full changed path, where
+  # `*` also crosses `/`, so a pattern anchored with a directory prefix stays
+  # under it and `*.ext` reaches every depth.
+  while IFS= read -r changed; do
+    [ -n "$changed" ] || continue
+    while IFS= read -r pattern; do
+      [ -n "$pattern" ] || continue
+      # [[ == ]] with an unquoted right side matches $pattern as the glob it
+      # is; matching exactly one declared glob is this loop's whole purpose.
+      # shellcheck disable=SC2053
+      if [[ "$changed" == $pattern ]]; then
+        echo "error: the changed files of $url include $changed, which matches the banned pattern '$pattern' in $patterns_file" >&2
+        return 1
+      fi
+    done <<< "$patterns"
+  done <<< "$changes"
+  return 0
 }
 
 pr_check_scan() {
@@ -325,6 +405,11 @@ if { [ -z "$PR_HEAD" ] || ! fm_dod_forge_head_is_named_head "$MODE"; } \
   echo "error: $GATE_REASON" >&2
   exit 1
 fi
+
+# The project's banned-pattern contract is checked after the done-line gate and
+# before any state changes below, so a refusal is pure: metadata, polls, and
+# sidecars are exactly as registration left them.
+pr_check_banned_paths "$PROVIDER" "$PROJECT" "$URL" || exit 1
 
 META_TMP=
 META_LOCK=

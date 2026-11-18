@@ -18,6 +18,14 @@
 # Mark the pull request ready for review, then arm again; a lane that keeps a
 # draft on purpose declares a wait instead of reporting done. An unreadable
 # draft state does not refuse, matching how the head read below is optional.
+# A GitHub pull request with unresolved bot review threads is refused the same
+# way, naming the thread count and the bot accounts: every bot review finding
+# must be fixed or resolved with a reason before the pull request is
+# presented, so a registration would present it as merge-ready while its bot
+# findings are still open. Human review threads are not checked here yet, and
+# an unreadable thread report never refuses, matching the draft reading; the
+# merge-time re-record below skips both reads, because its caller's merge is
+# an explicitly approved action whose own refusals are authoritative.
 # bin/fm-pr-merge.sh records through this script with FM_PR_CHECK_MERGE=1 and
 # skips this refusal, because its own merge-time draft refusal is authoritative.
 # The recorded pr= also frees the task's place in a declared project capacity
@@ -246,6 +254,32 @@ if [ "$PROVIDER" = github ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && command -v g
   DRAFT_JSON=$(gh pr view "$URL" --json isDraft 2>/dev/null || true)
   if [ "$(fm_pr_json_draft_state "$DRAFT_JSON")" = true ]; then
     echo "error: $URL is a draft pull request; a draft cannot be merged, so merge monitoring would wait for an event that cannot occur - mark it ready for review and arm again, or declare a wait instead of done if the draft is deliberate" >&2
+    exit 1
+  fi
+fi
+
+# Unresolved bot review threads are checked right after the draft check
+# passes, so a pull request whose bot review findings are still open is never
+# registered for merge monitoring, which would later present it as
+# merge-ready: every bot finding must first be fixed or resolved with a
+# reason. GitHub review threads exist only through GraphQL, so this is a
+# github-only read on the same host export the draft read uses, paginated like
+# bin/fm-contributions.sh's threads read. A positive reading refuses before
+# anything is recorded or armed; an unreadable one does not block, matching
+# the draft reading above; and the merge-time re-record is skipped, because
+# its caller's merge is an explicitly approved action whose own refusals are
+# authoritative.
+if [ "$PROVIDER" = github ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
+  THREAD_JSON=$(gh api graphql --paginate --slurp \
+    -f owner="$FM_PR_OWNER" -f name="$FM_PR_REPO" -F number="$FM_PR_NUMBER" \
+    -f query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){nodes{isResolved comments(first:1){nodes{author{login __typename}}}}pageInfo{hasNextPage endCursor}}}}}' \
+    2>/dev/null || true)
+  THREAD_READING=$(fm_pr_json_bot_review_threads "$THREAD_JSON") || THREAD_READING=
+  if [ -n "$THREAD_READING" ] && [ "$THREAD_READING" != "[]" ]; then
+    THREAD_COUNT=$(printf '%s' "$THREAD_READING" | jq 'length')
+    THREAD_AUTHORS=$(printf '%s' "$THREAD_READING" | jq -r 'unique[]' | paste -sd ',' -)
+    echo "error: $URL has $THREAD_COUNT unresolved bot review threads from $THREAD_AUTHORS; every bot review finding must be fixed or resolved with a reason before the pull request is presented, so it was not registered - fix or resolve the threads and arm again" >&2
     exit 1
   fi
 fi

@@ -142,6 +142,16 @@ printf 'host=%s\n' "${GH_HOST:-}" >> "$FM_TEST_GH_LOG"
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
   "api graphql")
+    case "$*" in
+      *reviewThreads*)
+        if [ -n "${FM_TEST_GH_THREADS_JSON+x}" ]; then
+          printf '%s\n' "$FM_TEST_GH_THREADS_JSON"
+        else
+          printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+        fi
+        exit 0
+        ;;
+    esac
     printf '%s\n' \
       "state=${FM_TEST_GH_GRAPHQL_STATE:-MERGED}" \
       "merged=${FM_TEST_GH_GRAPHQL_MERGED:-true}" \
@@ -687,6 +697,109 @@ test_draft_pull_request_is_not_armed() {
     > "$dir/stdout" 2> "$dir/stderr" || fail "an unreadable draft state blocked arming"
   [ -f "$dir/home/state/task-a.check.sh" ] || fail "an unreadable draft state was not armed"
   pass "arming refuses a draft pull request, naming it, and arms a ready or unreadable one"
+}
+
+# A bot review finding must be fixed or resolved with a reason before its pull
+# request is presented, so registration refuses a pull request that still has
+# unresolved bot review threads, naming the thread count and the bot accounts,
+# before anything is recorded. A thread's author is its first comment's
+# author; both bot marks count - a login ending in [bot] and the Bot GraphQL
+# actor type - while a null or login-less author never does. Human review
+# threads, resolved bot threads, an unreadable thread report, and a missing
+# forge read never refuse; and the merge-time re-record, whose merge is
+# explicitly approved, never re-runs the gate.
+test_unresolved_bot_review_threads_refuse_registration() {
+  local dir rc
+
+  # No review threads at all.
+  dir=$(make_case bot-threads-none)
+  write_task_meta "$dir"
+  FM_TEST_GH_THREADS_JSON='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "a pull request with no review threads did not register: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$dir/home/state/task-a.meta" \
+    || fail "a pull request with no review threads was not recorded"
+  [ -f "$dir/home/state/task-a.check.sh" ] || fail "a pull request with no review threads was not armed"
+
+  # A resolved bot thread, and unresolved threads whose first-comment author
+  # is absent, null, or carries no login: none of them is a bot finding.
+  dir=$(make_case bot-threads-resolved)
+  write_task_meta "$dir"
+  FM_TEST_GH_THREADS_JSON='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true,"comments":{"nodes":[{"author":{"login":"old-bot[bot]","__typename":"Bot"}}]}},{"isResolved":false,"comments":{"nodes":[]}},{"isResolved":false,"comments":{"nodes":[{"author":null}]}},{"isResolved":false,"comments":{"nodes":[{"author":{"__typename":"User"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "resolved bot threads or a login-less author blocked arming: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$dir/home/state/task-a.meta" \
+    || fail "a pull request with resolved bot threads was not recorded"
+
+  # Three unresolved bot threads refuse: one carries both marks, one only the
+  # Bot actor type, one only the [bot] login suffix. The count names only bot
+  # threads, never a concurrent unresolved human thread or a previously
+  # resolved bot thread.
+  dir=$(make_case bot-threads-refused)
+  write_task_meta "$dir"
+  cp "$dir/home/state/task-a.meta" "$dir/meta.before"
+  set +e
+  FM_TEST_GH_THREADS_JSON='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"login":"north-code[bot]","__typename":"Bot"}}]}},{"isResolved":false,"comments":{"nodes":[{"author":{"login":"coverage-axi","__typename":"Bot"}}]}},{"isResolved":false,"comments":{"nodes":[{"author":{"login":"docs-bot[bot]"}}]}},{"isResolved":false,"comments":{"nodes":[{"author":{"login":"somehuman","__typename":"User"}}]}},{"isResolved":true,"comments":{"nodes":[{"author":{"login":"old-bot[bot]","__typename":"Bot"}}]}},{"isResolved":false,"comments":{"nodes":[]}},{"isResolved":false,"comments":{"nodes":[{"author":null}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "registration accepted a pull request with unresolved bot review threads"
+  grep -qF '3 unresolved bot review threads' "$dir/stderr" \
+    || fail "the refusal did not name the bot thread count: $(cat "$dir/stderr")"
+  grep -qF 'north-code[bot]' "$dir/stderr" || fail "the refusal did not name the first bot account"
+  grep -qF 'coverage-axi' "$dir/stderr" || fail "the refusal did not name the second bot account"
+  grep -qF 'docs-bot[bot]' "$dir/stderr" || fail "the refusal did not name the third bot account"
+  grep -qF 'https://github.com/o/r/pull/9' "$dir/stderr" \
+    || fail "the refusal did not name the pull request"
+  ! grep -qF 'somehuman' "$dir/stderr" || fail "the refusal named a human"
+  grep -qF 'fixed or resolved with a reason' "$dir/stderr" \
+    || fail "the refusal did not name the presentation rule"
+  cmp -s "$dir/meta.before" "$dir/home/state/task-a.meta" \
+    || fail "a refused bot-thread status changed the task metadata"
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "a refused bot-thread status armed a poll"
+  [ ! -e "$dir/home/state/task-a.pr-poll" ] || fail "a refused bot-thread status wrote a poll sidecar"
+  [ ! -s "$dir/guard.log" ] || fail "a refused bot-thread status reached the guard"
+
+  # Unresolved human review threads alone never block: the gate's scope is bot
+  # threads only.
+  dir=$(make_case bot-threads-human)
+  write_task_meta "$dir"
+  FM_TEST_GH_THREADS_JSON='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"login":"somehuman","__typename":"User"}}}]}},"{"isResolved":false,"comments":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "an unresolved human thread blocked arming: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$dir/home/state/task-a.meta" \
+    || fail "a pull request with only human threads was not recorded"
+
+  # An unreadable thread report never blocks, matching the draft reading.
+  dir=$(make_case bot-threads-unreadable)
+  write_task_meta "$dir"
+  FM_TEST_GH_THREADS_JSON='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":"broken","pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "an unreadable thread report blocked arming: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$dir/home/state/task-a.meta" \
+    || fail "an unreadable thread report was not recorded"
+
+  # The merge-time re-record never re-runs the gate: its merge is explicitly
+  # approved and its own refusals are authoritative.
+  dir=$(make_case bot-threads-merge-time)
+  write_task_meta "$dir"
+  FM_PR_CHECK_MERGE=1 FM_TEST_GH_THREADS_JSON='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"login":"north-code[bot]","__typename":"Bot"}}]}},"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "the merge-time re-record refused an approved merge: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$dir/home/state/task-a.meta" \
+    || fail "the merge-time re-record did not re-record the pull request"
+
+  # A forge that cannot answer the thread read at all also still registers,
+  # byte for byte as before the gate existed.
+  dir=$(make_case bot-threads-forge-unreadable)
+  write_task_meta "$dir"
+  FM_TEST_GH_THREADS_JSON='not json' run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "a non-JSON thread report blocked arming: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/9' "$dir/home/state/task-a.meta" \
+    || fail "a non-JSON thread report was not recorded"
+
+  pass "registration refuses unresolved bot review threads, naming count and bots, and passes resolved, human, unreadable, and merge-time ones"
 }
 
 # A secondmate is a persistent worker, not a delivery lane: it never owns a
@@ -4132,6 +4245,7 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_draft_pull_request_is_not_armed
+test_unresolved_bot_review_threads_refuse_registration
 test_secondmate_record_refuses_a_pr_watch
 test_unpushed_named_head_refuses_registration
 test_direct_pr_unpushed_commit_refuses_registration

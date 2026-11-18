@@ -374,6 +374,30 @@ fm_pr_json_draft_state() {  # <pull-request-json>
   ' 2>/dev/null || true
 }
 
+# The one reading of a GitHub pull request's unresolved bot review threads.
+# Prints one compact JSON array with an element per unresolved thread authored
+# by a bot account, so a readable payload always emits an array - empty for
+# none - while unreadable input fails with no output at all, matching the
+# draft reading: a positive reading refuses its caller, an unreadable one
+# never blocks. A bot account is one whose login ends in [bot] or whose
+# GraphQL actor type is Bot, the two ways the forge marks a machine reviewer.
+# A thread's author is its first comment's author, which is also the forge's
+# own notion of a review thread's author; a null or login-less author, as a
+# deleted writer leaves behind, is never a bot.
+fm_pr_json_bot_review_threads() {  # <review-thread-pages-json>
+  printf '%s' "${1-}" | jq -e -c '
+    (if type == "array" then . else [.] end) as $pages
+    | if ($pages | all(.[] | .data.repository.pullRequest.reviewThreads.nodes; type == "array")) then
+        [$pages[].data.repository.pullRequest.reviewThreads.nodes[]
+          | select(.isResolved == false)
+          | .comments.nodes[0].author
+          | select(. != null)
+          | select((((.login | type) == "string") and (.login | endswith("[bot]"))) or .__typename == "Bot")
+          | .login]
+      else error("unreadable review-thread payload") end
+  ' 2>/dev/null
+}
+
 fm_pr_file_mode() {
   if [ "$(uname)" = Darwin ]; then
     /usr/bin/stat -f %Lp "$1" 2>/dev/null

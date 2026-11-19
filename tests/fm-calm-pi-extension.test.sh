@@ -502,6 +502,7 @@ test_queued_operational_rows() {
   cat >"$fixture/operational-input-probe.sh" <<'SH'
 #!/usr/bin/env bash
 [ -e "$FM_CLASSIFIER_DOWN" ] && exit 3
+[ -z "${FM_QUEUED_CLASSIFIER_CALLS:-}" ] || printf '%s\n' "${1-}" >>"$FM_QUEUED_CLASSIFIER_CALLS"
 exec "$FM_OPERATIONAL_INPUT_OWNER" "$@"
 SH
   chmod +x "$fixture/operational-input-probe.sh"
@@ -510,9 +511,10 @@ SH
     FM_OPERATIONAL_INPUT_SCRIPT="$fixture/operational-input-probe.sh" \
     FM_OPERATIONAL_INPUT_OWNER="$OPERATIONAL_INPUT" \
     FM_CLASSIFIER_DOWN="$fixture/classifier-down" \
+    FM_QUEUED_CLASSIFIER_CALLS="$fixture/classifier-calls" \
     PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
     node --input-type=module 2>&1 <<'JS'
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const packageRoot = process.env.PI_PACKAGE_DIR;
@@ -588,6 +590,7 @@ function makeHost(session) {
     // Pi reads its session through runtimeHost, which a session replacement swaps.
     runtimeHost: { session },
     compactionQueuedMessages: [],
+    pendingBashComponents: [],
     statuses: [],
     warnings: [],
     editorText: "",
@@ -685,6 +688,25 @@ visibility.setCalmPresentation(true);
   check(JSON.stringify(session.prompts) === JSON.stringify([watcherOne]), `tree navigation continuation prompt was ${JSON.stringify(session.prompts)}`);
   check(JSON.stringify(session.followUp) === "[]", `tree navigation left the notification queued: ${JSON.stringify(session.followUp)}`);
   check(JSON.stringify(host.statuses) === JSON.stringify([layout.CALM_SUPERVISION_CONTINUES_NOTICE]), `tree navigation notice: ${JSON.stringify(host.statuses)}`);
+}
+
+// 2b. Redraws of a large queued backlog classify each distinct text once. Pi calls the
+//     listing synchronously on its render path; an uncached spawn per row per redraw
+//     froze the TUI behind a stalled provider request with watcher wakes queuing up.
+{
+  const session = makeSession();
+  const host = makeHost(session);
+  const backlog = Array.from({ length: 40 }, (_, index) =>
+    operationalInput.encodeFirstmateOperationalInput("watcher", `QUEUED_MONITOR_BACKLOG_${index}`));
+  session.followUp.push(...backlog, captainText);
+  const callsFile = process.env.FM_QUEUED_CLASSIFIER_CALLS;
+  writeFileSync(callsFile, "");
+  for (let redraw = 0; redraw < 25; redraw += 1) host.updatePendingMessagesDisplay();
+  const kindCalls = readFileSync(callsFile, "utf8").split("\n").filter((line) => line === "kind").length;
+  check(kindCalls === backlog.length, `40 queued notifications over 25 redraws spawned the classifier ${kindCalls} times`);
+  assertNoOperationalText(host.rows(), "backlog listing");
+  check(host.rows().includes(captainText), "captain text hidden in backlog listing");
+  session.followUp.length = 0;
 }
 
 // 3. A row already hidden stays hidden on Escape even if the classifier cannot answer again.

@@ -49,11 +49,11 @@ function operationalInputAnswer(
   return command === "classify" ? stdout.replace(/\n$/, "") : stdout;
 }
 
-function runOperationalInputCommand(
+function spawnOperationalInputCommand(
   command: OperationalInputCommand,
   content: string,
   kind?: FirstmateCurrentOperationalKind,
-): string | undefined {
+): { status: number | null; answer: string | undefined } {
   const invocation = firstmateShellInvocation(
     operationalInputScript,
     operationalInputArgs(command, kind),
@@ -64,10 +64,21 @@ function runOperationalInputCommand(
       input: content,
       maxBuffer: 1024 * 1024,
     });
-    return operationalInputAnswer(command, result.status, result.stdout ?? "");
+    return {
+      status: result.status,
+      answer: operationalInputAnswer(command, result.status, result.stdout ?? ""),
+    };
   } catch {
-    return undefined;
+    return { status: null, answer: undefined };
   }
+}
+
+function runOperationalInputCommand(
+  command: OperationalInputCommand,
+  content: string,
+  kind?: FirstmateCurrentOperationalKind,
+): string | undefined {
+  return spawnOperationalInputCommand(command, content, kind).answer;
 }
 
 function encodeFailure(kind: FirstmateCurrentOperationalKind): Error {
@@ -127,13 +138,35 @@ export function classifyFirstmateCurrentOperationalText(
 // captain can type, so hiding them would hide real input.
 const LEGACY_CALM_OPERATIONAL_PREFIX = "\u2063Supervisor escalate (";
 
+// Calm asks this from Pi's synchronous render path: the queued-row listing filters
+// every queued message on every redraw, and the transcript adapter asks again per row.
+// Each uncached answer is a blocking classifier spawn, so a backlog of queued watcher
+// follow-ups (for example behind a stalled provider request) multiplied by redraws can
+// hold the event loop indefinitely and freeze the TUI. The answer for a given text is a
+// pure function of that text, so it is remembered. Only definitive classifier verdicts
+// (exit 0 match, exit 1 non-match) are kept; a failed or missing classifier is asked
+// again next time, preserving the fail-visible behavior. Bounded, oldest-first eviction.
+const PRESENTATION_ANSWER_LIMIT = 512;
+const presentationAnswers = new Map<string, boolean>();
+
+function rememberPresentationAnswer(text: string, answer: boolean): void {
+  if (presentationAnswers.size >= PRESENTATION_ANSWER_LIMIT) {
+    const oldest = presentationAnswers.keys().next();
+    if (!oldest.done) presentationAnswers.delete(oldest.value);
+  }
+  presentationAnswers.set(text, answer);
+}
+
 // Single owner of "may Calm presentation hide this exact input?", shared by the
 // transcript-row and queued-row adapters so the two can never disagree about a message.
 // Text without the U+2063 marker answers here without spawning the classifier.
 export function isFirstmateOperationalPresentationText(text: string): boolean {
   if (!text.includes("\u2063")) return false;
-  return (
-    classifyFirstmateCurrentOperationalText(text) !== undefined ||
-    text.startsWith(LEGACY_CALM_OPERATIONAL_PREFIX)
-  );
+  if (text.startsWith(LEGACY_CALM_OPERATIONAL_PREFIX)) return true;
+  const remembered = presentationAnswers.get(text);
+  if (remembered !== undefined) return remembered;
+  const { status, answer } = spawnOperationalInputCommand("kind", text);
+  const operational = answer !== undefined;
+  if (status === 0 || status === 1) rememberPresentationAnswer(text, operational);
+  return operational;
 }

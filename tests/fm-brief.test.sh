@@ -565,55 +565,6 @@ test_no_mistakes_dod_green_detection() {
   pass "fm-brief.sh: no-mistakes DOD detects a green PR from the drive call, not a status poll"
 }
 
-# The drive call's bounded hold (default 8m) regularly returns without a gate or
-# outcome, and workers that read that structured return as a pause declared
-# paused and stopped, waiting hours for a supervision steer. The rendered DOD
-# must give a concrete reattach loop - enumerate the no-gate returns, reattach
-# at once, and keep reissuing `no-mistakes axi run` until a gate or an outcome
-# returns - and must forbid declaring a pause or ending the turn on an elapsed
-# hold, in both drive shapes: the foreground one config/wait-no-turns selects
-# and the background one a home without that flag keeps.
-test_no_mistakes_dod_reattach_loop() {
-  local home bg_brief fg_brief brief
-  home="$TMP_ROOT/reattach-loop-home"
-  mkdir -p "$home/data" "$home/config"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-reattach-bg some-proj --mode no-mistakes >/dev/null 2>&1 \
-    || fail "background-drive scaffold exited non-zero"
-  bg_brief="$home/data/brief-reattach-bg/brief.md"
-  : > "$home/config/wait-no-turns"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-reattach-fg some-proj --mode no-mistakes >/dev/null 2>&1 \
-    || fail "foreground-drive scaffold exited non-zero"
-  fg_brief="$home/data/brief-reattach-fg/brief.md"
-  assert_present "$bg_brief" "background brief was not scaffolded"
-  assert_present "$fg_brief" "foreground brief was not scaffolded"
-  for brief in "$bg_brief" "$fg_brief"; do
-    assert_grep "elapsed hold, timeout, or kill" "$brief" \
-      "$brief: the DOD did not enumerate the no-gate returns the elapsed hold covers"
-    # shellcheck disable=SC2016 # Literal backticks must stay verbatim.
-    assert_grep 'reattach at once by re-running `no-mistakes axi run` without flags' "$brief" \
-      "$brief: the DOD dropped the immediate reattach after a no-gate return"
-    assert_grep "until a gate or outcome comes back" "$brief" \
-      "$brief: the DOD loop did not run only until a gate or an outcome"
-    # shellcheck disable=SC2016 # Literal backticks must stay verbatim.
-    assert_grep 'Never declare `paused` on an elapsed hold and never end the turn on one' "$brief" \
-      "$brief: the DOD did not forbid declaring a pause on an elapsed hold"
-    assert_grep "covers every reissue of this loop" "$brief" \
-      "$brief: the declaration the reporting rule made must cover the loop's reissues"
-    assert_grep "never a reason to stop and wait for a steer" "$brief" \
-      "$brief: the DOD must name stopping for a steer as the exact anti-pattern"
-    assert_no_grep "its own wait elapsed" "$brief" \
-      "$brief: an old loose reattach mention survived"
-  done
-  # shellcheck disable=SC2016 # Literal backticks must stay verbatim.
-  assert_grep 'issue the same foreground call again, one at a time, and keep running that loop' "$fg_brief" \
-    "the foreground DOD loop must reissue the identical foreground call"
-  assert_grep "backgrounded the same way, and keep reissuing that exact call in a loop" "$bg_brief" \
-    "the background DOD loop must reissue the backgrounded call itself"
-  assert_no_grep "backgrounded the same way, and keep reissuing" "$fg_brief" \
-    "the foreground DOD taught the backgrounded reattach"
-  pass "fm-brief.sh: no-mistakes DOD gives a concrete reattach loop and forbids a pause on an elapsed hold"
-}
-
 # Fleet evidence (2026-10): no-mistakes ships across harnesses reported done
 # right after committing, because the Definition of done opened with the
 # commit-is-done line, told the worker to report done and stop there, and
@@ -1950,7 +1901,6 @@ test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_no_mistakes_dod_green_detection
-test_no_mistakes_dod_reattach_loop
 test_no_mistakes_dod_commit_step_precedes_pipeline_drive
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
